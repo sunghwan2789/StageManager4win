@@ -1,0 +1,11 @@
+﻿DWM_TNP_*
+DwmGetWindowAttribute
+DwmQueryThumbnailSourceSize
+DwmRegisterThumbnail
+DwmUnregisterThumbnail
+DwmUpdateThumbnailProperties
+EnumWindows
+GetWindowInfo
+GetWindowThreadProcessId
+WINDOW_EX_STYLE
+WINDOW_STYLE

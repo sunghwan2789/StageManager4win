@@ -8,6 +8,10 @@ namespace StageManager4win;
 
 public partial class MainForm : Form
 {
+    private const int ThumbnailContentWidth = 160;
+    private const int ThumbnailContentHeight = 120;
+    private const int AppMargin = 30;
+
     public MainForm()
     {
         InitializeComponent();
@@ -16,40 +20,50 @@ public partial class MainForm : Form
     private void MainForm_Load(object sender, EventArgs e)
     {
         var x = new WindowWatcher();
-        foreach (var (window, acc) in x.Windows.Reverse().Zip(Enumerable.Range(0, int.MaxValue)))
+        var stages = new List<StageInfo>();
+        foreach (var window in x.Windows)
         {
-            var hwnd = window.Handle;
-
-            using var process = Process.GetProcessById(window.ProcessId);
-
-            DwmRegisterThumbnail((HWND)Handle, hwnd, out var thumbnailId).ThrowOnFailure();
-
-            DwmQueryThumbnailSourceSize(thumbnailId, out var sourceSize).ThrowOnFailure();
-            var thumbnailSizeVector = new Vector2(sourceSize.Width, sourceSize.Height);
-            thumbnailSizeVector = Vector2.Multiply(thumbnailSizeVector, 0.3f);
-            var thumbnailDest = new RECT
+            stages.Add(new StageInfo
             {
-                left = acc * 10,
-                top = acc * 10 + 100,
-                right = acc * 10 + (int)thumbnailSizeVector.X,
-                bottom = acc * 10 + 100 + (int)thumbnailSizeVector.Y,
-            };
-            //thumbnailSizeVector = Vector2.Clamp(thumbnailSizeVector, )
-            var thumbnailProps = new DWM_THUMBNAIL_PROPERTIES
-            {
-                dwFlags = DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY | DWM_TNP_VISIBLE | DWM_TNP_RECTDESTINATION,
-                opacity = 255 * 100 / 100,
-                fSourceClientAreaOnly = false,
-                fVisible = true,
-                rcDestination = thumbnailDest,
-            };
-            DwmUpdateThumbnailProperties(thumbnailId, thumbnailProps).ThrowOnFailure();
-
-            flowLayoutPanel1.Controls.Add(new Label()
-            {
-                Text = $"{process.ProcessName}-{process.Id}({process.MainWindowTitle})",
-                AutoSize = true,
+                Windows = new[] { window },
             });
         }
+
+        // FIXME: loop by app
+        var windowOffset = new Point(0, 0);
+        foreach (var (stage, stageIndex) in stages.Zip(Enumerable.Range(0, 5)))
+        {
+            Size tallestThumbnailSize = default;
+            foreach (var window in stage.Windows.Reverse())
+            {
+                var hwnd = window.Handle;
+                DwmRegisterThumbnail((HWND)Handle, hwnd, out var thumbnailId).ThrowOnFailure();
+
+                DwmQueryThumbnailSourceSize(thumbnailId, out var sourceSize).ThrowOnFailure();
+                var thumbnailSize = Size.Truncate((Size)sourceSize * GetFitRatio(sourceSize));
+                var thumbnailDest = new RECT(windowOffset, thumbnailSize);
+                var thumbnailProps = new DWM_THUMBNAIL_PROPERTIES
+                {
+                    dwFlags = DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY | DWM_TNP_VISIBLE | DWM_TNP_RECTDESTINATION,
+                    opacity = 255 * 100 / 100,
+                    fSourceClientAreaOnly = false,
+                    fVisible = true,
+                    rcDestination = thumbnailDest,
+                };
+                DwmUpdateThumbnailProperties(thumbnailId, thumbnailProps).ThrowOnFailure();
+
+                windowOffset = Point.Add(windowOffset, new Size(10, 0));
+                tallestThumbnailSize = new[] { tallestThumbnailSize, thumbnailSize }.MaxBy(x => x.Height);
+            }
+
+            windowOffset = new Point(0, windowOffset.Y + tallestThumbnailSize.Height + AppMargin);
+        }
+    }
+
+    private static float GetFitRatio(Size sourceSize)
+    {
+        var widthRatio = (float)ThumbnailContentWidth / sourceSize.Width;
+        var heightRatio = (float)ThumbnailContentHeight / sourceSize.Height;
+        return float.Min(widthRatio, heightRatio);
     }
 }

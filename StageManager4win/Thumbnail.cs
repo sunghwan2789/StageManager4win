@@ -42,15 +42,27 @@ public class Thumbnail : IDisposable
 
     public Point Location { get; set; } = Point.Empty;
 
-    // TODO: magnify on mouse hover
-    public Rectangle Rectangle => new Rectangle(Location, Size);
+    public bool Inflate { get; set; }
+
+    public Rectangle Rectangle
+    {
+        get
+        {
+            var rect = new Rectangle(Location, Size);
+            if (!Inflate)
+            {
+                rect.Inflate(-5, -5);
+            }
+            return rect;
+        }
+    }
 
     public void Update()
     {
         var thumbnailProps = new DWM_THUMBNAIL_PROPERTIES
         {
             dwFlags = DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY | DWM_TNP_VISIBLE | DWM_TNP_RECTDESTINATION,
-            opacity = 255 * 100 / 100,
+            opacity = (byte)(255 * (Inflate ? 100 : 80) / 100),
             fSourceClientAreaOnly = false,
             fVisible = true,
             rcDestination = Rectangle,

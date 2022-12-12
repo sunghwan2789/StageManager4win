@@ -7,6 +7,12 @@ public partial class MainForm : Form
     private const int AppMargin = 30;
     private const int WindowMargin = 10;
 
+    private readonly WindowWatcher _windowWatcher = new();
+    private readonly Dictionary<HWND, Thumbnail> _thumbnails = new();
+    private readonly List<StageInfo> _stages = new();
+
+    private IEnumerable<Thumbnail>? _inflatedThumbnails;
+
     public MainForm()
     {
         InitializeComponent();
@@ -14,24 +20,26 @@ public partial class MainForm : Form
 
     private void MainForm_Load(object sender, EventArgs e)
     {
-        var x = new WindowWatcher();
-        var stages = new List<StageInfo>();
-        foreach (var window in x.Windows)
+        foreach (var window in _windowWatcher.Windows)
         {
-            stages.Add(new StageInfo
+            _thumbnails[window.Handle] = new Thumbnail((HWND)Handle, window.Handle);
+            _stages.Add(new StageInfo
             {
                 Windows = new[] { window },
             });
         }
+    }
 
+    protected override void OnPaint(PaintEventArgs e)
+    {
         // FIXME: loop by app
-        var windowOffset = new Point(0, 0);
-        foreach (var (stage, stageIndex) in stages.Zip(Enumerable.Range(0, 5)))
+        var windowOffset = new Point(WindowMargin, WindowMargin);
+        foreach (var (stage, stageIndex) in _stages.Zip(Enumerable.Range(0, 5)))
         {
             Size tallestThumbnailSize = default;
             foreach (var window in stage.Windows.Reverse())
             {
-                var thumbnail = new Thumbnail((HWND)Handle, window.Handle);
+                var thumbnail = _thumbnails[window.Handle];
                 thumbnail.Location = windowOffset;
                 thumbnail.Update();
 
@@ -39,8 +47,41 @@ public partial class MainForm : Form
                 tallestThumbnailSize = new[] { tallestThumbnailSize, thumbnail.Size }.MaxBy(x => x.Height);
             }
 
-            windowOffset.X = 0;
+            windowOffset.X = WindowMargin;
             windowOffset.Offset(0, tallestThumbnailSize.Height + AppMargin);
         }
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        var location = e.Location;
+
+        var hit = _stages.Find(stage => stage
+            .Windows
+            .Select(window => _thumbnails[window.Handle])
+            .Any(thumbnail => thumbnail.Rectangle.Contains(location))
+        );
+
+        if (_inflatedThumbnails is { })
+        {
+            foreach (var thumbnail in _inflatedThumbnails)
+            {
+                thumbnail.Inflate = false;
+            }
+        }
+
+        if (hit is null)
+        {
+            _inflatedThumbnails = null;
+            Invalidate();
+            return;
+        }
+
+        _inflatedThumbnails = hit.Windows.Select(window => _thumbnails[window.Handle]).ToList();
+        foreach (var thumbnail in _inflatedThumbnails)
+        {
+            thumbnail.Inflate = true;
+        }
+        Invalidate();
     }
 }

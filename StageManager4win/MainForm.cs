@@ -1,4 +1,6 @@
+using Windows.Win32;
 using Windows.Win32.Foundation;
+using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace StageManager4win;
 
@@ -83,5 +85,27 @@ public partial class MainForm : Form
             thumbnail.Inflate = true;
         }
         Invalidate();
+    }
+
+    protected override void OnMouseClick(MouseEventArgs e)
+    {
+        var location = e.Location;
+
+        var hit = _stages.Find(stage => stage
+            .Windows
+            .Select(window => _thumbnails[window.Handle])
+            .Any(thumbnail => thumbnail.Rectangle.Contains(location))
+        );
+
+        if (hit is null)
+        {
+            return;
+        }
+
+        foreach (var window in hit.Windows)
+        {
+            PInvoke.ShowWindow(window.Handle, SHOW_WINDOW_CMD.SW_NORMAL);
+            PInvoke.SetForegroundWindow(window.Handle);
+        }
     }
 }

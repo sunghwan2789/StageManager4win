@@ -7,5 +7,7 @@ DwmUpdateThumbnailProperties
 EnumWindows
 GetWindowInfo
 GetWindowThreadProcessId
+SetForegroundWindow
+ShowWindow
 WINDOW_EX_STYLE
 WINDOW_STYLE

@@ -9,7 +9,7 @@ public partial class MainForm : Form
     private const int AppMargin = 30;
     private const int WindowMargin = 10;
 
-    private readonly WindowWatcher _windowWatcher = new();
+    private readonly WindowWatcher _windowWatcher;
     private readonly Dictionary<HWND, Thumbnail> _thumbnails = new();
     private readonly List<StageInfo> _stages = new();
 
@@ -18,6 +18,30 @@ public partial class MainForm : Form
     public MainForm()
     {
         InitializeComponent();
+
+        _windowWatcher = new WindowWatcher((HWND)Handle);
+        _windowWatcher.WindowCreated += window =>
+        {
+            _thumbnails[window.Handle] = new Thumbnail((HWND)Handle, window.Handle);
+
+            _stages.Add(new StageInfo
+            {
+                Windows = new[] { window },
+            });
+
+            Invoke(Invalidate);
+        };
+        _windowWatcher.WindowDestroyed += window =>
+        {
+            if (_thumbnails.Remove(window.Handle, out var thumbnail))
+            {
+                thumbnail.Dispose();
+            }
+
+            _stages.RemoveAll(x => x.Windows.Any(x => x.Handle == window.Handle));
+
+            Invoke(Invalidate);
+        };
     }
 
     private void MainForm_Load(object sender, EventArgs e)

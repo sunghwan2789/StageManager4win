@@ -5,6 +5,7 @@ DwmRegisterThumbnail
 DwmUnregisterThumbnail
 DwmUpdateThumbnailProperties
 EnumWindows
+GetDpiForWindow
 GetWindowInfo
 GetWindowThreadProcessId
 SetForegroundWindow

@@ -9,11 +9,14 @@ public class Thumbnail : IDisposable
     public const int ThumbnailContentWidth = 160;
     public const int ThumbnailContentHeight = 120;
 
+    private readonly HWND _destination;
     private readonly nint _id;
 
     internal Thumbnail(HWND destination, HWND source)
     {
-        DwmRegisterThumbnail(destination, source, out _id).ThrowOnFailure();
+        _destination = destination;
+
+        DwmRegisterThumbnail(_destination, source, out _id).ThrowOnFailure();
     }
 
     public void Dispose()
@@ -53,9 +56,12 @@ public class Thumbnail : IDisposable
             {
                 rect.Inflate(-5, -5);
             }
-            return rect;
+
+            return Rectangle.Truncate((RectangleF)(((RectangleF)rect).ToVector4() * DpiScale));
         }
     }
+
+    private float DpiScale => GetDpiForWindow(_destination) / 96f;
 
     public void Update()
     {

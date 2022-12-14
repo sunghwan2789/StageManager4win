@@ -72,7 +72,7 @@ public class WindowWatcher
                 }
                 else
                 {
-                    WindowUpdated?.Invoke(window);
+                    OnWindowUpdated(window);
                 }
                 break;
             case EVENT_OBJECT_CLOAKED:
@@ -90,10 +90,16 @@ public class WindowWatcher
             default:
                 if (_windows.TryGetValue(hwnd, out window))
                 {
-                    WindowUpdated?.Invoke(window);
+                    OnWindowUpdated(window);
                 }
                 break;
         }
+    }
+
+    protected void OnWindowUpdated(WindowInfo window)
+    {
+        window.Update();
+        WindowUpdated?.Invoke(window);
     }
 
     private void RegisterWindow(HWND hwnd, bool emitEvent = true)
@@ -136,7 +142,7 @@ public class WindowWatcher
         if (_windows.TryGetValue(hwnd, out var window))
         {
             _movingWindowHandle = hwnd;
-            WindowUpdated?.Invoke(window);
+            OnWindowUpdated(window);
         }
     }
 
@@ -145,7 +151,7 @@ public class WindowWatcher
         if (_windows.TryGetValue(hwnd, out var window))
         {
             _movingWindowHandle = default;
-            WindowUpdated?.Invoke(window);
+            OnWindowUpdated(window);
         }
     }
 
@@ -158,7 +164,7 @@ public class WindowWatcher
 
         if (_windows.TryGetValue(hwnd, out var window))
         {
-            WindowUpdated?.Invoke(window);
+            OnWindowUpdated(window);
         }
     }
 

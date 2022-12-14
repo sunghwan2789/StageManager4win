@@ -44,7 +44,6 @@ public partial class MainForm : Form
         };
         _windowWatcher.WindowUpdated += window =>
         {
-            window.Update();
             Invoke(Invalidate);
         };
     }

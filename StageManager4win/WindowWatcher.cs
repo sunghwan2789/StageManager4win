@@ -37,6 +37,7 @@ public class WindowWatcher
 
     public event Action<WindowInfo>? WindowCreated;
     public event Action<WindowInfo>? WindowDestroyed;
+    public event Action<WindowInfo>? WindowUpdated;
 
     public IEnumerable<WindowInfo> Windows => _windows.Values;
 
@@ -47,6 +48,7 @@ public class WindowWatcher
             return;
         }
 
+        WindowInfo? window;
         switch (eventType)
         {
             case EVENT_OBJECT_SHOW:
@@ -55,26 +57,25 @@ public class WindowWatcher
             case EVENT_OBJECT_DESTROY:
                 UnregisterWindow(hwnd);
                 break;
-            case EVENT_OBJECT_CLOAKED:
-                //UpdateWindow(hwnd, WindowUpdateType.Hide);
+            case EVENT_OBJECT_UNCLOAKED when _windows.TryGetValue(hwnd, out window):
+                WindowUpdated?.Invoke(window);
                 break;
             case EVENT_OBJECT_UNCLOAKED:
+                RegisterWindow(hwnd);
+                break;
+            case EVENT_OBJECT_CLOAKED when _windows.TryGetValue(hwnd, out window):
+                // TODO: unregister if window is not cloaked by Switch
+                if (true)
                 {
-                    if (!_windows.TryGetValue(hwnd, out var window))
-                    {
-                        RegisterWindow(hwnd);
-                    }
-                    // todo: update
-                    break;
+                    UnregisterWindow(hwnd);
                 }
-            case EVENT_SYSTEM_MINIMIZESTART:
-                //UpdateWindow(hwnd, WindowUpdateType.MinimizeStart);
+                else
+                {
+                    WindowUpdated?.Invoke(window);
+                }
                 break;
-            case EVENT_SYSTEM_MINIMIZEEND:
-                //UpdateWindow(hwnd, WindowUpdateType.MinimizeEnd);
-                break;
-            case EVENT_SYSTEM_FOREGROUND:
-                //UpdateWindow(hwnd, WindowUpdateType.Foreground);
+            case EVENT_OBJECT_CLOAKED:
+                UnregisterWindow(hwnd);
                 break;
             case EVENT_SYSTEM_MOVESIZESTART:
                 //StartWindowMove(hwnd);
@@ -84,6 +85,12 @@ public class WindowWatcher
                 break;
             case EVENT_OBJECT_LOCATIONCHANGE:
                 //WindowMove(hwnd);
+                break;
+            default:
+                if (_windows.TryGetValue(hwnd, out window))
+                {
+                    WindowUpdated?.Invoke(window);
+                }
                 break;
         }
     }

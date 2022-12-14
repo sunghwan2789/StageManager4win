@@ -10,6 +10,7 @@ public class WindowWatcher
     private readonly HWND _handle;
     private readonly WINEVENTPROC _winEventProc;
     private readonly Dictionary<HWND, WindowInfo> _windows = new();
+    private HWND _movingWindowHandle;
 
     internal WindowWatcher(HWND handle)
     {
@@ -78,13 +79,13 @@ public class WindowWatcher
                 UnregisterWindow(hwnd);
                 break;
             case EVENT_SYSTEM_MOVESIZESTART:
-                //StartWindowMove(hwnd);
+                StartWindowMove(hwnd);
                 break;
             case EVENT_SYSTEM_MOVESIZEEND:
-                //EndWindowMove(hwnd);
+                EndWindowMove(hwnd);
                 break;
             case EVENT_OBJECT_LOCATIONCHANGE:
-                //WindowMove(hwnd);
+                WindowMove(hwnd);
                 break;
             default:
                 if (_windows.TryGetValue(hwnd, out window))
@@ -127,6 +128,37 @@ public class WindowWatcher
         if (_windows.Remove(hwnd, out var window))
         {
             WindowDestroyed?.Invoke(window);
+        }
+    }
+
+    private void StartWindowMove(HWND hwnd)
+    {
+        if (_windows.TryGetValue(hwnd, out var window))
+        {
+            _movingWindowHandle = hwnd;
+            WindowUpdated?.Invoke(window);
+        }
+    }
+
+    private void EndWindowMove(HWND hwnd)
+    {
+        if (_windows.TryGetValue(hwnd, out var window))
+        {
+            _movingWindowHandle = default;
+            WindowUpdated?.Invoke(window);
+        }
+    }
+
+    private void WindowMove(HWND hwnd)
+    {
+        if (_movingWindowHandle != hwnd)
+        {
+            return;
+        }
+
+        if (_windows.TryGetValue(hwnd, out var window))
+        {
+            WindowUpdated?.Invoke(window);
         }
     }
 

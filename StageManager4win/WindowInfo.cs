@@ -31,7 +31,7 @@ public class WindowInfo
             cbSize = (uint)Marshal.SizeOf<WINDOWINFO>(),
         };
 
-        Load();
+        Update();
     }
 
     public bool IsTopLevel => (_raw.dwStyle & (uint)WS_CHILD) == 0;
@@ -66,7 +66,7 @@ public class WindowInfo
 
     internal int ProcessId => _processId;
 
-    private void Load()
+    public void Update()
     {
         GetWindowInfo(_handle, ref _raw);
     }

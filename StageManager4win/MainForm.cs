@@ -42,6 +42,11 @@ public partial class MainForm : Form
 
             Invoke(Invalidate);
         };
+        _windowWatcher.WindowUpdated += window =>
+        {
+            window.Update();
+            Invoke(Invalidate);
+        };
     }
 
     private void MainForm_Load(object sender, EventArgs e)
@@ -128,8 +133,15 @@ public partial class MainForm : Form
 
         foreach (var window in hit.Windows)
         {
-            PInvoke.ShowWindow(window.Handle, SHOW_WINDOW_CMD.SW_NORMAL);
-            PInvoke.SetForegroundWindow(window.Handle);
+            if (window.IsIconic)
+            {
+                PInvoke.ShowWindow(window.Handle, SHOW_WINDOW_CMD.SW_NORMAL);
+                PInvoke.SetForegroundWindow(window.Handle);
+            }
+            else
+            {
+                PInvoke.ShowWindow(window.Handle, SHOW_WINDOW_CMD.SW_SHOWMINNOACTIVE);
+            }
         }
     }
 }

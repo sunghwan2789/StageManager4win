@@ -59,7 +59,7 @@ public class WindowWatcher
                 UnregisterWindow(hwnd);
                 break;
             case EVENT_OBJECT_UNCLOAKED when _windows.TryGetValue(hwnd, out window):
-                WindowUpdated?.Invoke(window);
+                OnWindowUpdated(window);
                 break;
             case EVENT_OBJECT_UNCLOAKED:
                 RegisterWindow(hwnd);

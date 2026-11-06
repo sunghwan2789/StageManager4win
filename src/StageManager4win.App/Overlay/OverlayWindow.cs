@@ -4,6 +4,7 @@ using StageManager4win.Rendering;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Gdi;
+using Windows.Win32.UI.Input.KeyboardAndMouse;
 using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace StageManager4win.Overlay;
@@ -11,12 +12,20 @@ namespace StageManager4win.Overlay;
 internal sealed class OverlayWindow : Form
 {
     private const int WmMouseActivate = 0x0021;
+    private const int WmMouseMove = 0x0200;
     private const int WmLeftButtonDown = 0x0201;
+    private const int WmMouseWheel = 0x020A;
+    private const int WmMouseLeave = 0x02A3;
+    private const int WmDpiChanged = 0x02E0;
     private const nint MaNoActivate = 3;
+    // Matches the 1.05 hover scale in OverlayTarget; the region must include the growth.
+    private const double HoverGrowth = 0.025;
 
     private readonly List<TilePlacement> _placements = new();
     private uint _dpi;
     private bool _visible = true;
+    private bool _trackingLeave;
+    private WindowId? _hover;
 
     public OverlayWindow(MonitorDescriptor monitor)
     {
@@ -36,6 +45,12 @@ internal sealed class OverlayWindow : Form
     public MonitorDescriptor Monitor { get; }
 
     public event Action<WindowId>? TileClicked;
+
+    public event Action<WindowId?>? HoverChanged;
+
+    public event Action<int>? ScrollRequested;
+
+    public new event Action<uint>? DpiChanged;
 
     protected override bool ShowWithoutActivation => true;
 
@@ -88,32 +103,77 @@ internal sealed class OverlayWindow : Form
 
     protected override void WndProc(ref Message message)
     {
-        if (message.Msg == WmMouseActivate)
+        switch (message.Msg)
         {
-            message.Result = MaNoActivate;
-            return;
-        }
-
-        if (message.Msg == WmLeftButtonDown)
-        {
-            var packed = message.LParam.ToInt64();
-            var x = (short)(packed & 0xFFFF);
-            var y = (short)((packed >> 16) & 0xFFFF);
-            var dipX = x * 96.0 / _dpi;
-            var dipY = y * 96.0 / _dpi;
-            foreach (var placement in _placements)
-            {
-                var bounds = placement.Bounds;
-                if (dipX >= bounds.X && dipX < bounds.X + bounds.Width &&
-                    dipY >= bounds.Y && dipY < bounds.Y + bounds.Height)
+            case WmMouseActivate:
+                message.Result = MaNoActivate;
+                return;
+            case WmLeftButtonDown:
+                var clicked = HitFromPacked(message.LParam);
+                if (clicked is { } window)
                 {
-                    TileClicked?.Invoke(placement.Window);
-                    break;
+                    TileClicked?.Invoke(window);
                 }
-            }
+
+                break;
+            case WmMouseMove:
+                TrackLeave();
+                SetHover(HitFromPacked(message.LParam));
+                break;
+            case WmMouseLeave:
+                _trackingLeave = false;
+                SetHover(null);
+                break;
+            case WmMouseWheel:
+                var delta = (short)((message.WParam.ToInt64() >> 16) & 0xFFFF);
+                ScrollRequested?.Invoke(delta);
+                break;
+            case WmDpiChanged:
+                var dpi = (uint)(message.WParam.ToInt64() & 0xFFFF);
+                UpdateDpi(dpi);
+                DpiChanged?.Invoke(dpi);
+                break;
         }
 
         base.WndProc(ref message);
+    }
+
+    private WindowId? HitFromPacked(nint packed)
+    {
+        var value = packed.ToInt64();
+        var x = (short)(value & 0xFFFF);
+        var y = (short)((value >> 16) & 0xFFFF);
+        return TileHitTest.Hit(_placements, x * 96.0 / _dpi, y * 96.0 / _dpi);
+    }
+
+    private void SetHover(WindowId? window)
+    {
+        if (_hover == window)
+        {
+            return;
+        }
+
+        _hover = window;
+        HoverChanged?.Invoke(window);
+    }
+
+    private unsafe void TrackLeave()
+    {
+        if (_trackingLeave)
+        {
+            return;
+        }
+
+        var track = new TRACKMOUSEEVENT
+        {
+            cbSize = (uint)sizeof(TRACKMOUSEEVENT),
+            dwFlags = TRACKMOUSEEVENT_FLAGS.TME_LEAVE,
+            hwndTrack = new HWND(Handle)
+        };
+        if (PInvoke.TrackMouseEvent(ref track))
+        {
+            _trackingLeave = true;
+        }
     }
 
     private unsafe void UpdateRegion()
@@ -133,7 +193,14 @@ internal sealed class OverlayWindow : Form
                 var top = (int)Math.Round(bounds.Y * _dpi / 96.0);
                 var right = (int)Math.Round((bounds.X + bounds.Width) * _dpi / 96.0);
                 var bottom = (int)Math.Round((bounds.Y + bounds.Height) * _dpi / 96.0);
-                var rectangle = PInvoke.CreateRectRgn(left, top, right, bottom);
+                var scale = _dpi / 96.0;
+                var padX = (int)Math.Ceiling(bounds.Width * scale * HoverGrowth) + 1;
+                var padY = (int)Math.Ceiling(bounds.Height * scale * HoverGrowth) + 1;
+                var rectangle = PInvoke.CreateRectRgn(
+                    left - padX,
+                    top - padY,
+                    right + padX,
+                    bottom + padY);
                 PInvoke.CombineRgn(region, region, rectangle, RGN_COMBINE_MODE.RGN_OR);
                 PInvoke.DeleteObject(new HGDIOBJ(rectangle.Value));
             }

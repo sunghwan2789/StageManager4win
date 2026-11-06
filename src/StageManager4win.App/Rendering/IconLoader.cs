@@ -24,7 +24,7 @@ public static class IconLoader
             using var canvas = new Bitmap(pixelSize, pixelSize, PixelFormat.Format32bppArgb);
             using (var graphics = Graphics.FromImage(canvas))
             {
-                graphics.Clear(Color.Transparent);
+                graphics.Clear(Color.FromArgb(255, 20, 20, 26));
                 graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 var scale = Math.Min(
                     (double)pixelSize / source.Width,

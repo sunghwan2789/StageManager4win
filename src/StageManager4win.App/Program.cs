@@ -60,30 +60,45 @@ internal static class Program
     {
         var monitor = new DisplayManager().GetMonitors()[0];
         var log = Path.Combine(Path.GetTempPath(), "sm-overlay-spike.log");
-        using var render = new RenderThread();
-        using var overlay = new OverlayWindow(monitor);
-        overlay.TileClicked += window => File.AppendAllText(log, $"{window.Value:X}\n");
-        render.Start();
-        overlay.Show();
-        render.Post(new RenderCommand.CreateOverlay(monitor.Id, overlay.Handle, monitor.Dpi));
-
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
         var tiles = new[]
         {
             new TileVisual(
                 new WindowId(1),
                 new RectD(100, 100, 160, 120),
                 12,
-                IconBitmap.Solid(1, 1, 0xFF3B82F6),
+                IconLoader.Load(Path.Combine(windows, "explorer.exe")) ??
+                    IconBitmap.Solid(1, 1, 0xFF3B82F6),
                 false,
                 0),
             new TileVisual(
                 new WindowId(2),
                 new RectD(100, 250, 160, 90),
                 12,
-                IconBitmap.Solid(1, 1, 0xFF22C55E),
+                IconLoader.Load(Path.Combine(windows, "System32", "cmd.exe")) ??
+                    IconBitmap.Solid(1, 1, 0xFF22C55E),
                 false,
                 0)
         };
+
+        using var render = new RenderThread();
+        using var overlay = new OverlayWindow(monitor);
+        overlay.TileClicked += window => File.AppendAllText(log, $"{window.Value:X}\n");
+        overlay.HoverChanged += window =>
+        {
+            File.AppendAllText(log, window is { } hovered ? $"hover:{hovered.Value:X}\n" : "hover:none\n");
+            render.Post(new RenderCommand.SetOverlayHover(monitor.Id, window));
+        };
+        overlay.ScrollRequested += delta => File.AppendAllText(log, $"wheel:{delta}\n");
+        overlay.DpiChanged += dpi =>
+        {
+            File.AppendAllText(log, $"dpi:{dpi}\n");
+            render.Post(new RenderCommand.CreateOverlay(monitor.Id, overlay.Handle, dpi));
+            render.Post(new RenderCommand.UpdateOverlay(monitor.Id, tiles, true));
+        };
+        render.Start();
+        overlay.Show();
+        render.Post(new RenderCommand.CreateOverlay(monitor.Id, overlay.Handle, monitor.Dpi));
         overlay.SetTiles(tiles);
         render.Post(new RenderCommand.UpdateOverlay(monitor.Id, tiles, true));
         Application.Run(overlay);

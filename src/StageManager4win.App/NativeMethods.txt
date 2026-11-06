@@ -68,3 +68,5 @@ CreateRectRgn
 CombineRgn
 DeleteObject
 SetWindowPos
+TrackMouseEvent
+TRACKMOUSEEVENT_FLAGS

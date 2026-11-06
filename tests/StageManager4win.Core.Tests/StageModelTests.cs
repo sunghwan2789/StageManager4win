@@ -246,4 +246,27 @@ public class StageModelTests
         Assert.False(model.Windows[new WindowId(2)].IsMinimized);
         AssertOrder(new[] { new WindowId(2) }, model.Monitors["M1"].Strip);
     }
+
+    [Fact]
+    public void ReorderStrip_AppliesRequestedOrderAndKeepsTheRest()
+    {
+        var model = new StageModel();
+        model.Reset(new[] { W(1, "A"), W(2, "B"), W(3, "C") });
+
+        model.ReorderStrip("M1", new[] { new WindowId(3), new WindowId(1) });
+
+        AssertOrder(new[] { new WindowId(3), new WindowId(1), new WindowId(2) }, model.Monitors["M1"].Strip);
+    }
+
+    [Fact]
+    public void ReorderStrip_IgnoresStageWindowsAndUnknownIds()
+    {
+        var model = new StageModel();
+        model.Reset(new[] { W(1, "A"), W(2, "B"), W(3, "C") }, new WindowId(1));
+
+        model.ReorderStrip("M1", new[] { new WindowId(1), new WindowId(3), new WindowId(99) });
+
+        AssertOrder(new[] { new WindowId(3), new WindowId(2) }, model.Monitors["M1"].Strip);
+        AssertOrder(new[] { new WindowId(1) }, model.Monitors["M1"].Stage);
+    }
 }

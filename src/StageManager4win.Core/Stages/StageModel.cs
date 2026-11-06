@@ -192,6 +192,27 @@ public sealed class StageModel
         _windows[window] = snapshot with { IsMinimized = false };
     }
 
+    public void ReorderStrip(string monitorId, IReadOnlyList<WindowId> ordered)
+    {
+        if (!_monitors.TryGetValue(monitorId, out var monitor))
+        {
+            return;
+        }
+
+        var reordered = ordered.Where(monitor.Strip.Contains).Distinct().ToList();
+
+        foreach (var id in monitor.Strip)
+        {
+            if (!reordered.Contains(id))
+            {
+                reordered.Add(id);
+            }
+        }
+
+        monitor.Strip.Clear();
+        monitor.Strip.AddRange(reordered);
+    }
+
     public void Remove(WindowId window)
     {
         if (!_windows.Remove(window, out var snapshot))

@@ -59,8 +59,8 @@ Tasks 3–8 and the build steps in Task 1 run on any OS with the .NET 10 SDK. Ta
 - Create: `src/StageManager4win.App/NativeMethods.txt`
 - Create: `tests/StageManager4win.Core.Tests/StageManager4win.Core.Tests.csproj`
 - Delete: `src/StageManager4win.Core/Class1.cs` (after the build succeeds)
-- Delete: `tests/StageManager4win.Core.Tests/UnitTest1.cs`
 - Delete: `src/StageManager4win.App/Form1.cs`, `Form1.Designer.cs`, `Form1.resx` if generated
+- Keep: `tests/StageManager4win.Core.Tests/UnitTest1.cs` until Task 3 adds the first real tests
 
 **Interfaces:**
 - Consumes: nothing.
@@ -122,7 +122,7 @@ Replace `src/StageManager4win.App/StageManager4win.App.csproj` with:
 </Project>
 ```
 
-Create `src/StageManager4win.App/app.manifest`:
+Create `src/StageManager4win.App/app.manifest`. Do not put DPI settings here: `ApplicationHighDpiMode` and `Application.SetHighDpiMode` already configure them, and WinForms emits `WFO0003` if both exist.
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -133,12 +133,6 @@ Create `src/StageManager4win.App/app.manifest`:
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
     </application>
   </compatibility>
-  <application xmlns="urn:schemas-microsoft-com:asm.v3">
-    <windowsSettings>
-      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
-      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
-    </windowsSettings>
-  </application>
 </assembly>
 ```
 

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/StageManager4win.App/StageManager4win.App.csproj" />
+    <Project Path="src/StageManager4win.Core/StageManager4win.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/StageManager4win.Core.Tests/StageManager4win.Core.Tests.csproj" />
+  </Folder>
+</Solution>

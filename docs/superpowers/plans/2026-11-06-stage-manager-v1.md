@@ -1055,7 +1055,7 @@ git commit -m "feat(core): add per-monitor strip layout math"
   - `sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)` with `const uint ModAlt = 1, ModControl = 2, ModShift = 4, ModWin = 8`.
   - `sealed record HotkeySettings(HotkeyBinding Toggle, HotkeyBinding Next, HotkeyBinding Previous, HotkeyBinding ShowDesktop)` with `static HotkeySettings Default`.
   - `sealed record AppSettings` with `bool Enabled = true`, `WindowMode WindowMode = WindowMode.OneAtATime`, `bool AutoHide = false`, `StripEdge StripEdge = StripEdge.Left`, `int MaxVisibleStripItems = 8`, `int PreviewFps = 30`, `HotkeySettings Hotkeys = HotkeySettings.Default`, `IReadOnlyList<string> ExcludedAppIds = Array.Empty<string>()`.
-  - `AppSettings.Normalize()` clamps `MaxVisibleStripItems` to `1..12`, `PreviewFps` to 15/30/60 (nearest, fallback 30), invalid enums to defaults, and removes null/blank exclusions.
+  - `AppSettings.Normalize()` keeps `MaxVisibleStripItems` in `1..12` and falls back to 8 outside it, maps `PreviewFps` to 15/30/60 (nearest, fallback 30), resets invalid enums to defaults, and removes null/blank exclusions.
   - `sealed class SettingsStore` with `SettingsStore(string directory)`, `string FilePath`, `AppSettings Load()`, `void Save(AppSettings settings)`.
   - `sealed record WindowIdentity(string AppId, string Title)`, `sealed record MonitorWorkspace(string MonitorId, IReadOnlyList<WindowIdentity> StripOrder, WindowIdentity? Foreground)`, `sealed record WorkspaceState(IReadOnlyList<MonitorWorkspace> Monitors)`.
   - `sealed class WorkspaceStateStore` with `WorkspaceStateStore(string directory)`, `string FilePath`, `WorkspaceState Load()`, `void Save(WorkspaceState state)`.

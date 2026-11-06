@@ -1,0 +1,124 @@
+using System.Numerics;
+using System.Runtime.InteropServices;
+using Windows.Win32;
+using Windows.Win32.Graphics.Direct3D;
+using Windows.Win32.Graphics.Direct3D11;
+using Windows.Win32.Graphics.DirectComposition;
+using Windows.Win32.Graphics.Dxgi.Common;
+
+namespace StageManager4win.Rendering;
+
+internal static class TilePainter
+{
+    // A 1x1 bitmap is a solid tile; larger bitmaps are letterboxed as app icons.
+    private const float IconScale = 0.6f;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TileConstants
+    {
+        public Vector2 UvScale;
+        public Vector2 UvOffset;
+        public Vector4 Background;
+    }
+
+    public static unsafe void Paint(
+        RenderDevice device,
+        IDCompositionSurface surface,
+        IconBitmap bitmap,
+        uint width,
+        uint height)
+    {
+        var expected = checked(bitmap.Width * bitmap.Height * 4);
+        if (bitmap.Bgra.Length < expected)
+        {
+            throw new ArgumentException("Icon pixel buffer is too small.", nameof(bitmap));
+        }
+
+        surface.BeginDraw(null, typeof(ID3D11Texture2D).GUID, out var update, out var offset);
+        ID3D11Texture2D? iconTexture = null;
+        ID3D11ShaderResourceView? view = null;
+        ID3D11RenderTargetView? target = null;
+        try
+        {
+            var texture = (ID3D11Texture2D)update;
+            device.D3D11Device.CreateRenderTargetView(texture, null, out target);
+
+            fixed (byte* pixels = bitmap.Bgra)
+            {
+                var description = new D3D11_TEXTURE2D_DESC
+                {
+                    Width = (uint)bitmap.Width,
+                    Height = (uint)bitmap.Height,
+                    MipLevels = 1,
+                    ArraySize = 1,
+                    Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc = new DXGI_SAMPLE_DESC { Count = 1 },
+                    Usage = D3D11_USAGE.D3D11_USAGE_IMMUTABLE,
+                    BindFlags = D3D11_BIND_FLAG.D3D11_BIND_SHADER_RESOURCE
+                };
+                var data = new D3D11_SUBRESOURCE_DATA
+                {
+                    pSysMem = pixels,
+                    SysMemPitch = (uint)(bitmap.Width * 4),
+                    SysMemSlicePitch = (uint)expected
+                };
+                device.D3D11Device.CreateTexture2D(description, data, out iconTexture);
+            }
+
+            device.D3D11Device.CreateShaderResourceView(iconTexture, null, out view);
+
+            var isSolid = bitmap.Width == 1 && bitmap.Height == 1;
+            var scale = isSolid ? 1f : IconScale;
+            var constants = new TileConstants
+            {
+                UvScale = new Vector2(scale),
+                UvOffset = new Vector2((1f - scale) / 2f),
+                Background = new Vector4(0.08f, 0.08f, 0.10f, 1f)
+            };
+            var context = device.Context;
+            context.Map(device.Constants, 0, D3D11_MAP.D3D11_MAP_WRITE_DISCARD, 0, out var mapped);
+            *(TileConstants*)mapped.pData = constants;
+            context.Unmap(device.Constants, 0);
+
+            var viewport = new D3D11_VIEWPORT
+            {
+                TopLeftX = offset.X,
+                TopLeftY = offset.Y,
+                Width = width,
+                Height = height,
+                MinDepth = 0,
+                MaxDepth = 1
+            };
+
+            context.OMSetRenderTargets(new[] { target }, null);
+            context.RSSetViewports(new[] { viewport });
+            context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context.VSSetShader(device.VertexShader, null, 0);
+            context.PSSetShader(device.PixelShader, null, 0);
+            context.PSSetConstantBuffers(0, new[] { device.Constants });
+            context.PSSetShaderResources(0, new[] { view });
+            context.PSSetSamplers(0, new[] { device.Sampler });
+            context.Draw(3, 0);
+        }
+        finally
+        {
+            surface.EndDraw();
+            if (target is not null)
+            {
+                Marshal.ReleaseComObject(target);
+            }
+
+            if (view is not null)
+            {
+                Marshal.ReleaseComObject(view);
+            }
+
+            if (iconTexture is not null)
+            {
+                Marshal.ReleaseComObject(iconTexture);
+            }
+
+            Marshal.ReleaseComObject(update);
+        }
+    }
+}

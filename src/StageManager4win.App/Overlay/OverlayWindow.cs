@@ -115,7 +115,7 @@ internal sealed class OverlayWindow : Form
                     TileClicked?.Invoke(window);
                 }
 
-                break;
+                return;
             case WmMouseMove:
                 TrackLeave();
                 SetHover(HitFromPacked(message.LParam));

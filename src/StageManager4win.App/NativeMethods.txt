@@ -1,5 +1,9 @@
 GetForegroundWindow
 SetForegroundWindow
+ShowWindow
+SHOW_WINDOW_CMD
+AttachThreadInput
+GetCurrentThreadId
 RegisterHotKey
 UnregisterHotKey
 GetDpiForMonitor

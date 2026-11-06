@@ -91,6 +91,12 @@ internal sealed class WindowEventWatcher : IDisposable
                     return;
                 }
 
+                // Child objects fire constantly; only top-level windows change what we show.
+                if (idObject != 0 || idChild != 0)
+                {
+                    return;
+                }
+
                 Raised?.Invoke(WindowEventKind.Changed, (nint)hwnd);
                 return;
         }

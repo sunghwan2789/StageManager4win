@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using StageManager4win.Core.Settings;
 using StageManager4win.Input;
 using StageManager4win.UI;
@@ -9,6 +8,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 {
     private readonly SettingsStore _store;
     private readonly HotkeyManager _hotkeys;
+    private readonly StageCoordinator _coordinator;
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _enabledItem;
     private AppSettings _settings;
@@ -18,11 +18,12 @@ public sealed class TrayApplicationContext : ApplicationContext
         _store = store;
         _settings = store.Load();
 
+        _coordinator = new StageCoordinator(store);
         _hotkeys = new HotkeyManager();
-        _hotkeys.ToggleRequested += () => Debug.WriteLine("Toggle");
-        _hotkeys.NextRequested += () => Debug.WriteLine("Next");
-        _hotkeys.PreviousRequested += () => Debug.WriteLine("Previous");
-        _hotkeys.ShowDesktopRequested += () => Debug.WriteLine("ShowDesktop");
+        _hotkeys.ToggleRequested += () => _coordinator.ToggleStripUnderPointer();
+        _hotkeys.NextRequested += () => _coordinator.Cycle(1);
+        _hotkeys.PreviousRequested += () => _coordinator.Cycle(-1);
+        _hotkeys.ShowDesktopRequested += () => _coordinator.ShowDesktop();
 
         _enabledItem = new ToolStripMenuItem("Enabled")
         {
@@ -50,6 +51,10 @@ public sealed class TrayApplicationContext : ApplicationContext
             ContextMenuStrip = menu
         };
 
+        _coordinator.StatusMessage += message =>
+            _tray.ShowBalloonTip(4000, "StageManager4win", message, ToolTipIcon.Warning);
+        _coordinator.Start();
+
         if (!_hotkeys.Register(_settings.Hotkeys, out var error))
         {
             MessageBox.Show(error, "StageManager4win", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -69,6 +74,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         _settings = _settings with { Enabled = enabled };
         _store.Save(_settings);
+        _coordinator.ApplySettings(_settings);
         EnabledChanged?.Invoke();
     }
 
@@ -93,6 +99,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _settings = next;
         _store.Save(_settings);
         _enabledItem.Checked = _settings.Enabled;
+        _coordinator.ApplySettings(_settings);
 
         if (enabledChanged)
         {
@@ -104,8 +111,9 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         if (disposing)
         {
-            _tray.Dispose();
+            _coordinator.Dispose();
             _hotkeys.Dispose();
+            _tray.Dispose();
         }
 
         base.Dispose(disposing);

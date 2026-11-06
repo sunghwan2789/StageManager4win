@@ -138,9 +138,9 @@ Transitions (applied to the monitor `M` that owns the affected window):
 - Shader: embedded HLSL, `D3DCompile` at startup, `SV_VertexID` triangle, linear sampler. No vertex buffer, no input layout, no D2D, no DirectWrite.
 - Frame rate: cap at 30 fps (configurable 15/30/60). Drop frames when the render thread is busy.
 - Minimised tiles: keep the last frame, set visual opacity to ~0.5.
-- Hover: raise/scale the tile and brighten it; restore on leave.
+- Hover: raise/scale the tile and emphasize it with relative opacity (hovered 1.0, others 0.92); restore on leave.
 - Empty state: no tile.
-- Capture failure: icon tile (extract `HICON` with `SHGetFileInfo`/`ExtractIconEx`, draw into a DIB, upload as a texture) plus the window title as the accessible name. No text in the overlay.
+- Capture failure: icon tile (extract the associated icon with `System.Drawing.Icon.ExtractAssociatedIcon`, then upload it as a texture) plus the window title as the accessible name. No text in the overlay.
 - Device loss: tear down all sessions/surfaces, recreate the device, re-enumerate, and restart captures. Retry with backoff; never crash the UI thread.
 
 ### 6.7 Capture lifecycle
@@ -163,7 +163,7 @@ Transitions (applied to the monitor `M` that owns the affected window):
 - Clicking the active stage’s window is normal Windows behaviour; the foreground hook updates the model.
 - Toggle hotkey: show/hide the strip on the monitor under the pointer (fallback: foreground monitor).
 - Cycle forward/back: take a snapshot of that monitor’s strip order at the start of a cycle, keep a cursor, and advance/wrap through the snapshot. Cycle activation is always one-at-a-time, regardless of `WindowMode`; skip windows that have closed or moved monitors. Foreground changes during the cycle do not reorder the snapshot; release it when the cycle ends (timeout or pointer move).
-- Auto-hide: a 2 px edge trigger window per monitor; reveal on pointer entry, hide after a delay when the pointer leaves the strip.
+- Auto-hide: a 100 ms cursor poll per monitor; reveal when the pointer reaches the strip edge in DIPs, hide after a 500 ms delay when it leaves the strip.
 - Show desktop: v1 uses a hotkey and `Shell.Application.ToggleDesktop()`; wallpaper-click detection is phase 2 because it requires shell hooks.
 - Drag-to-stage from another app: phase 2. The v1 model must not assume one app per stage forever.
 - No keyboard focus is taken by the overlay; UIA `Invoke` and global hotkeys are the keyboard paths.
@@ -173,7 +173,7 @@ Transitions (applied to the monitor `M` that owns the affected window):
 
 `%LOCALAPPDATA%\StageManager4win\settings.json`, written atomically (temp + rename), with a backup. Settings:
 
-- enabled, window mode (global), auto-hide, strip edge, max visible strip items, preview fps, theme.
+- enabled, window mode (global), auto-hide, strip edge, max visible strip items, preview fps.
 - hotkeys: toggle, next, previous, show desktop.
 - excluded AUMIDs.
 - per-monitor persisted window order `(AUMID, title)` and the active app/window (state file separate from settings). Best-effort; prune missing windows.
@@ -269,4 +269,8 @@ None. The three product decisions are settled: Windows 11, independent per-monit
 - Window-to-monitor membership uses the window centre; a window belongs to one monitor.
 - Wallpaper-click show desktop, tile labels, multi-app stages, and drag-to-stage are phase 2.
 - The overlay hit region is the union of tile rectangles; rounded corners are visual only.
-- Persistence is best-effort by `(AUMID, title)` because window handles are not stable.
+- v1 has no theme setting: the overlay has no chrome, only tiles with a fixed dark backdrop.
+- Auto-hide polls the cursor every 100 ms instead of creating edge-trigger HWNDs; same behaviour with fewer topmost windows.
+- Icon fallback uses `System.Drawing.Icon.ExtractAssociatedIcon`, not `SHGetFileInfo`.
+- Hover uses scale plus relative opacity, not a shader brightness pass.
+- Persistence is best-effort by `(AppId, title)` because window handles are not stable.

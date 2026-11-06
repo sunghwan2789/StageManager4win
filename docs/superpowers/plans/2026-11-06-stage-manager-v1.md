@@ -1476,8 +1476,9 @@ git commit -m "feat(app): enumerate monitors and windows with WinEvent watching"
   - `sealed record TileVisual(WindowId Window, RectD BoundsDip, double CornerRadiusDip, IconBitmap? Icon, bool IsMinimized, nint SourceHwnd)`
   - `sealed record IconBitmap(int Width, int Height, byte[] Bgra)`
   - `abstract record RenderCommand` with `CreateOverlay(string MonitorId, nint Hwnd, uint Dpi)`, `UpdateOverlay(string MonitorId, IReadOnlyList<TileVisual> Tiles, bool Visible)`, `SetOverlayHover(string MonitorId, WindowId? Window)`, `RemoveOverlay(string MonitorId)`, `StopRenderThread`.
+  - `sealed class RenderDevice : IDisposable` with `RenderDevice()`, `ID3D11Device D3D11Device { get; }`, `IDXGIDevice DxgiDevice { get; }`, `IDCompositionDevice DComp { get; }`.
   - `sealed class RenderThread : IDisposable` with `RenderThread()`, `void Start()`, `void Post(RenderCommand command)`, `void Dispose()`
-  - `sealed class OverlayWindow : Form` with `OverlayWindow(MonitorDescriptor monitor)`, `MonitorDescriptor Monitor { get; }`, `void SetTiles(IReadOnlyList<TilePlacement> tiles)`, `void SetVisible(bool visible)`, `void UpdateDpi(uint dpi)`.
+  - `sealed class OverlayWindow : Form` with `OverlayWindow(MonitorDescriptor monitor)`, `MonitorDescriptor Monitor { get; }`, `void SetTiles(IReadOnlyList<TileVisual> tiles)`, `void SetVisible(bool visible)`, `void UpdateDpi(uint dpi)`.
   - `static IconBitmap IconBitmap.Solid(int width, int height, uint bgra)` and `static IconBitmap? IconLoader.Load(string? executablePath, int pixelSize = 64)`.
 
 **Overlay window rules:**
@@ -1486,7 +1487,7 @@ git commit -m "feat(app): enumerate monitors and windows with WinEvent watching"
 - `ShowWithoutActivation => true`.
 - Bounds = monitor bounds in physical pixels, set with `SetWindowPos(HWND_TOPMOST, ..., SWP_NOACTIVATE | SWP_SHOWWINDOW)`.
 - `WM_MOUSEACTIVATE` returns `MA_NOACTIVATE`.
-- `SetTiles` stores the tile list, converts each DIP rect to physical pixels (`round(dip * dpi / 96)`), builds a region with `CreateRectRgn` + `CombineRgn(RGN_OR)`, and calls `SetWindowRgn(hwnd, region, true)` (the window owns the region).
+- `SetTiles` stores the visual list, derives `TilePlacement(Window, BoundsDip)` for hit-testing/UIA, converts each DIP rect to physical pixels (`round(dip * dpi / 96)`), builds a region with `CreateRectRgn` + `CombineRgn(RGN_OR)`, and calls `SetWindowRgn(hwnd, region, true)` (the window owns the region).
 - `SetVisible(false)` sets an empty region; the HWND stays alive. Do not call `Hide()`.
 - Do not use `WS_EX_LAYERED`.
 
@@ -1979,7 +1980,8 @@ git commit -m "fix(app): harden capture lifecycle and device recovery"
 - Produces: persisted settings and per-monitor strip order, plus working exclusions.
 
 **Rules:**
-- `ApplySettings`: normalize, save, update the model mode, re-register hotkeys, update `MaxVisibleStripItems`/`PreviewFps`/`StripEdge`/`AutoHide`, re-enumerate so exclusions take effect, and `Refresh()`.
+- `TrayApplicationContext.ApplySettings` normalizes and saves, re-registers hotkeys, then calls `StageCoordinator.ApplySettings` with the accepted settings.
+- `StageCoordinator.ApplySettings`: update the model mode, update `MaxVisibleStripItems`/`PreviewFps`/`StripEdge`/`AutoHide`, re-enumerate so exclusions take effect, and `Refresh()`. The coordinator never registers hotkeys.
 - Hotkey registration failure: the tray context keeps the previous settings, re-registers the old bindings, and shows a modal error naming the conflicting binding; never run with a partially registered set.
 - Workspace save: debounce 1 second after a model change. For each monitor, write `StripOrder` as `(AppId, Title)` for strip windows and `Foreground` as the foreground window identity. Never write HWNDs.
 - Workspace load: after the first `Reset`/`Rebuild`, match saved identities in order to current windows on that monitor (match `AppId` and `Title`; duplicates consume matches in order), build the ordered id list, and call `model.ReorderStrip`. Ignore missing identities.
@@ -2025,7 +2027,7 @@ git commit -m "feat(app): persist settings, strip order, and app exclusions"
 - Produces: `sealed record StripHitArea(RectD BoundsDip, RectD EdgeZoneDip)` and `sealed class AutoHideController : IDisposable` with `AutoHideController(DisplayManager displays, Func<string, StripHitArea?> getStrip, Action<string, bool> setVisible)`.
 
 **Rules:**
-- Poll `Cursor.Position` every 100 ms with a WinForms timer.
+- Poll `Cursor.Position` every 100 ms with a WinForms timer. Convert the screen pixel position to monitor-local DIPs with the monitor origin and DPI before comparing it to `StripHitArea`.
 - When `AutoHide` is off, all overlays are visible (subject to fullscreen/session pause).
 - When on and a monitor's strip is hidden: show it when the pointer is within 2 DIP of the strip edge in that monitor's work area.
 - When on and visible: hide it after the pointer has been outside the strip rectangle plus a 30 DIP margin for 500 ms.

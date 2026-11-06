@@ -1,2 +1,4 @@
 GetForegroundWindow
 SetForegroundWindow
+RegisterHotKey
+UnregisterHotKey

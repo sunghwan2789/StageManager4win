@@ -6,6 +6,7 @@ using StageManager4win.Core.Layout;
 using StageManager4win.Core.Settings;
 using StageManager4win.Core.Stages;
 using StageManager4win.Core.Windows;
+using StageManager4win.Input;
 using StageManager4win.Overlay;
 using StageManager4win.Rendering;
 using StageManager4win.Windows;
@@ -25,6 +26,7 @@ internal sealed class StageCoordinator : IDisposable
     private readonly StageModel _model;
     private readonly Dictionary<string, OverlayWindow> _overlays = new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool> _visibleByMonitor = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, StripHitArea> _stripAreas = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _firstVisibleIndex = new(StringComparer.Ordinal);
     private readonly Dictionary<string, uint> _dpiByMonitor = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IconBitmap?> _icons = new(StringComparer.Ordinal);
@@ -34,6 +36,7 @@ internal sealed class StageCoordinator : IDisposable
     private readonly System.Windows.Forms.Timer _cycleReset = new() { Interval = 2000 };
     private readonly System.Windows.Forms.Timer _workspaceSave = new() { Interval = 1000 };
     private readonly WorkspaceStateStore _workspace;
+    private readonly AutoHideController _autoHide;
     private AppSettings _settings;
     private IReadOnlyList<MonitorDescriptor> _monitors = Array.Empty<MonitorDescriptor>();
     private CycleCursor? _cycle;
@@ -50,6 +53,7 @@ internal sealed class StageCoordinator : IDisposable
         _settings = _store.Load();
         _workspace = new WorkspaceStateStore(
             Path.GetDirectoryName(settingsStore.FilePath) ?? Environment.CurrentDirectory);
+        _autoHide = new AutoHideController(_display, GetStripArea, SetAutoHideVisible);
         _model = new StageModel(_settings.WindowMode);
         _render = new RenderThread();
         _render.DeviceLost += OnDeviceLost;
@@ -73,27 +77,34 @@ internal sealed class StageCoordinator : IDisposable
         _monitors = _display.GetMonitors();
         foreach (var monitor in _monitors)
         {
-            var overlay = new OverlayWindow(monitor);
-            var monitorId = monitor.Id;
-            overlay.TileClicked += ActivateWindow;
-            overlay.HoverChanged += window =>
-                _render.Post(new RenderCommand.SetOverlayHover(monitorId, window));
-            overlay.ScrollRequested += delta => Scroll(monitorId, delta);
-            overlay.DpiChanged += dpi => OnDpiChanged(monitorId, dpi);
-            overlay.Show();
-            _overlays[monitorId] = overlay;
-            _dpiByMonitor[monitorId] = monitor.Dpi;
+            CreateOverlay(monitor);
         }
 
+        _autoHide.RefreshMonitors();
         var foreground = _source.GetForegroundWindow();
         _model.Reset(Enumerate(), foreground);
         LoadWorkspace();
         _fullscreenPaused = IsFullscreen(foreground);
         StartRenderThread();
         SystemEvents.SessionSwitch += OnSessionSwitch;
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         _watcher.Raised += OnWindowEvent;
         _watcher.Start();
         Refresh();
+    }
+
+    private void CreateOverlay(MonitorDescriptor monitor)
+    {
+        var overlay = new OverlayWindow(monitor);
+        var monitorId = monitor.Id;
+        overlay.TileClicked += ActivateWindow;
+        overlay.HoverChanged += window =>
+            _render.Post(new RenderCommand.SetOverlayHover(monitorId, window));
+        overlay.ScrollRequested += delta => Scroll(monitorId, delta);
+        overlay.DpiChanged += dpi => OnDpiChanged(monitorId, dpi);
+        overlay.Show();
+        _overlays[monitorId] = overlay;
+        _dpiByMonitor[monitorId] = monitor.Dpi;
     }
 
     private void StartRenderThread()
@@ -119,7 +130,13 @@ internal sealed class StageCoordinator : IDisposable
 
     public void ApplySettings(AppSettings settings)
     {
-        _settings = settings.Normalize();
+        var next = settings.Normalize();
+        if (_settings.AutoHide != next.AutoHide)
+        {
+            _visibleByMonitor.Clear();
+        }
+
+        _settings = next;
         _model.SetMode(_settings.WindowMode);
         _render.Post(new RenderCommand.SetPreviewFps(_settings.PreviewFps));
         Reconcile();
@@ -193,6 +210,8 @@ internal sealed class StageCoordinator : IDisposable
 
         _disposed = true;
         SystemEvents.SessionSwitch -= OnSessionSwitch;
+        SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
+        _autoHide.Dispose();
         _watcher.Raised -= OnWindowEvent;
         _watcher.Dispose();
         _debounce.Stop();
@@ -441,6 +460,62 @@ internal sealed class StageCoordinator : IDisposable
 
     private void OnDeviceLost() => RunOnUiThread(RecoverRenderThread);
 
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
+        RunOnUiThread(RecreateOverlays);
+
+    private void RecreateOverlays()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _render.Dispose();
+        foreach (var overlay in _overlays.Values)
+        {
+            overlay.Dispose();
+        }
+
+        _overlays.Clear();
+        _dpiByMonitor.Clear();
+        _firstVisibleIndex.Clear();
+        _visibleByMonitor.Clear();
+        _stripAreas.Clear();
+        _monitors = _display.GetMonitors();
+        foreach (var monitor in _monitors)
+        {
+            CreateOverlay(monitor);
+        }
+
+        _autoHide.RefreshMonitors();
+        _render = new RenderThread();
+        _render.DeviceLost += OnDeviceLost;
+        _fullscreenPaused = IsFullscreen(_source.GetForegroundWindow());
+        StartRenderThread();
+        Rebuild();
+    }
+
+    private StripHitArea? GetStripArea(string monitorId)
+    {
+        if (!_settings.AutoHide || !_settings.Enabled || Suspended)
+        {
+            return null;
+        }
+
+        return _stripAreas.GetValueOrDefault(monitorId);
+    }
+
+    private void SetAutoHideVisible(string monitorId, bool visible)
+    {
+        if (_disposed || _visibleByMonitor.GetValueOrDefault(monitorId, true) == visible)
+        {
+            return;
+        }
+
+        _visibleByMonitor[monitorId] = visible;
+        Refresh();
+    }
+
     private void RecoverRenderThread()
     {
         if (_disposed)
@@ -533,6 +608,36 @@ internal sealed class StageCoordinator : IDisposable
                 monitor.WorkArea.Height * toDip,
                 _settings.StripEdge);
             var layout = StripLayoutCalculator.Calculate(items, options);
+            if (layout.Tiles.Count == 0)
+            {
+                _stripAreas.Remove(monitor.Id);
+            }
+            else
+            {
+                var firstBounds = layout.Tiles[0].Bounds;
+                var left = firstBounds.X;
+                var top = firstBounds.Y;
+                var right = firstBounds.X + firstBounds.Width;
+                var bottom = firstBounds.Y + firstBounds.Height;
+                foreach (var placement in layout.Tiles)
+                {
+                    left = Math.Min(left, placement.Bounds.X);
+                    top = Math.Min(top, placement.Bounds.Y);
+                    right = Math.Max(right, placement.Bounds.X + placement.Bounds.Width);
+                    bottom = Math.Max(bottom, placement.Bounds.Y + placement.Bounds.Height);
+                }
+
+                var monitorWidth = monitor.Bounds.Width * toDip;
+                var workTop = (monitor.WorkArea.Top - monitor.Bounds.Top) * toDip;
+                var workHeight = monitor.WorkArea.Height * toDip;
+                var edgeX = _settings.StripEdge == StripEdge.Left
+                    ? 0
+                    : Math.Max(0, monitorWidth - AutoHideController.RevealEdgeDip);
+                _stripAreas[monitor.Id] = new StripHitArea(
+                    new RectD(left, top, right - left, bottom - top),
+                    new RectD(edgeX, workTop, AutoHideController.RevealEdgeDip, workHeight));
+            }
+
             var tiles = new List<TileVisual>(layout.Tiles.Count);
             foreach (var placement in layout.Tiles)
             {
@@ -550,9 +655,11 @@ internal sealed class StageCoordinator : IDisposable
                     (nint)placement.Window.Value));
             }
 
+            var autoHideVisible = !_settings.AutoHide
+                || _visibleByMonitor.GetValueOrDefault(monitor.Id, true);
             var visible = _settings.Enabled
                 && !Suspended
-                && _visibleByMonitor.GetValueOrDefault(monitor.Id, true);
+                && autoHideVisible;
             overlay.SetTiles(tiles);
             overlay.SetVisible(visible);
             _render.Post(new RenderCommand.UpdateOverlay(monitor.Id, tiles, visible));

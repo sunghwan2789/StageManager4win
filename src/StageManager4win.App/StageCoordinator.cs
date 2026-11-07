@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
@@ -31,6 +32,8 @@ internal sealed class StageCoordinator : IDisposable
     private readonly IconBitmap _fallbackIcon = IconBitmap.Solid(1, 1, FallbackTileColor);
     private readonly System.Windows.Forms.Timer _debounce = new() { Interval = 100 };
     private readonly System.Windows.Forms.Timer _cycleReset = new() { Interval = 2000 };
+    private readonly System.Windows.Forms.Timer _workspaceSave = new() { Interval = 1000 };
+    private readonly WorkspaceStateStore _workspace;
     private AppSettings _settings;
     private IReadOnlyList<MonitorDescriptor> _monitors = Array.Empty<MonitorDescriptor>();
     private CycleCursor? _cycle;
@@ -45,11 +48,14 @@ internal sealed class StageCoordinator : IDisposable
     {
         _store = settingsStore;
         _settings = _store.Load();
+        _workspace = new WorkspaceStateStore(
+            Path.GetDirectoryName(settingsStore.FilePath) ?? Environment.CurrentDirectory);
         _model = new StageModel(_settings.WindowMode);
         _render = new RenderThread();
         _render.DeviceLost += OnDeviceLost;
         _debounce.Tick += (_, _) => OnDebounceTick();
         _cycleReset.Tick += (_, _) => OnCycleResetTick();
+        _workspaceSave.Tick += (_, _) => OnWorkspaceSaveTick();
     }
 
     public event Action<string>? StatusMessage;
@@ -81,6 +87,7 @@ internal sealed class StageCoordinator : IDisposable
 
         var foreground = _source.GetForegroundWindow();
         _model.Reset(Enumerate(), foreground);
+        LoadWorkspace();
         _fullscreenPaused = IsFullscreen(foreground);
         StartRenderThread();
         SystemEvents.SessionSwitch += OnSessionSwitch;
@@ -115,14 +122,7 @@ internal sealed class StageCoordinator : IDisposable
         _settings = settings.Normalize();
         _model.SetMode(_settings.WindowMode);
         _render.Post(new RenderCommand.SetPreviewFps(_settings.PreviewFps));
-        if (_settings.Enabled)
-        {
-            Reconcile();
-        }
-        else
-        {
-            Refresh();
-        }
+        Reconcile();
     }
 
     public void ToggleStripUnderPointer()
@@ -199,6 +199,8 @@ internal sealed class StageCoordinator : IDisposable
         _debounce.Dispose();
         _cycleReset.Stop();
         _cycleReset.Dispose();
+        _workspaceSave.Stop();
+        _workspaceSave.Dispose();
         foreach (var overlay in _overlays.Values)
         {
             overlay.Dispose();
@@ -246,7 +248,106 @@ internal sealed class StageCoordinator : IDisposable
     {
         _lastAspect.Clear();
         _model.Reset(Enumerate(), _source.GetForegroundWindow());
+        LoadWorkspace();
+        ScheduleWorkspaceSave();
         Refresh();
+    }
+
+    private void LoadWorkspace()
+    {
+        var saved = _workspace.Load();
+        foreach (var monitor in saved.Monitors)
+        {
+            if (!_model.Monitors.TryGetValue(monitor.MonitorId, out var state))
+            {
+                continue;
+            }
+
+            var used = new HashSet<WindowId>();
+            var ordered = new List<WindowId>();
+            foreach (var identity in monitor.StripOrder)
+            {
+                foreach (var id in state.Strip)
+                {
+                    if (used.Contains(id) || !_model.Windows.TryGetValue(id, out var snapshot))
+                    {
+                        continue;
+                    }
+
+                    if (snapshot.AppId == identity.AppId && snapshot.Title == identity.Title)
+                    {
+                        ordered.Add(id);
+                        used.Add(id);
+                        break;
+                    }
+                }
+            }
+
+            _model.ReorderStrip(monitor.MonitorId, ordered);
+
+            if (monitor.Foreground is { } foreground)
+            {
+                foreach (var snapshot in _model.Windows.Values)
+                {
+                    if (snapshot.MonitorId == monitor.MonitorId
+                        && snapshot.AppId == foreground.AppId
+                        && snapshot.Title == foreground.Title)
+                    {
+                        _model.SetForeground(snapshot.Id);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    private void ScheduleWorkspaceSave()
+    {
+        // Throttle, not restart: a steady event stream must not starve the save.
+        if (!_workspaceSave.Enabled)
+        {
+            _workspaceSave.Start();
+        }
+    }
+
+    private void OnWorkspaceSaveTick()
+    {
+        _workspaceSave.Stop();
+        if (_disposed)
+        {
+            return;
+        }
+
+        var monitors = new List<MonitorWorkspace>();
+        foreach (var (monitorId, state) in _model.Monitors)
+        {
+            var strip = new List<WindowIdentity>(state.Strip.Count);
+            foreach (var id in state.Strip)
+            {
+                if (_model.Windows.TryGetValue(id, out var snapshot))
+                {
+                    strip.Add(new WindowIdentity(snapshot.AppId, snapshot.Title));
+                }
+            }
+
+            WindowIdentity? foreground = null;
+            if (state.Foreground is { } foregroundId
+                && _model.Windows.TryGetValue(foregroundId, out var foregroundSnapshot))
+            {
+                foreground = new WindowIdentity(foregroundSnapshot.AppId, foregroundSnapshot.Title);
+            }
+
+            monitors.Add(new MonitorWorkspace(monitorId, strip, foreground));
+        }
+
+        try
+        {
+            _workspace.Save(new WorkspaceState(monitors));
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine(exception);
+        }
     }
 
     private void Reconcile()
@@ -295,6 +396,7 @@ internal sealed class StageCoordinator : IDisposable
             _render.Post(new RenderCommand.SetCapturePaused(Suspended));
         }
 
+        ScheduleWorkspaceSave();
         Refresh();
     }
 

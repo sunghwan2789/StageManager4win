@@ -12,6 +12,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _enabledItem;
     private AppSettings _settings;
+    private bool _syncingEnabled;
 
     public TrayApplicationContext(SettingsStore store)
     {
@@ -72,22 +73,17 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void ApplyEnabled(bool enabled)
     {
-        _settings = _settings with { Enabled = enabled };
-        _store.Save(_settings);
-        _coordinator.ApplySettings(_settings);
-        EnabledChanged?.Invoke();
-    }
-
-    private void ShowSettings()
-    {
-        using var form = new SettingsForm(_settings);
-        if (form.ShowDialog() != DialogResult.OK)
+        if (_syncingEnabled)
         {
             return;
         }
 
-        var next = form.Result.Normalize();
+        ApplySettings(_settings with { Enabled = enabled });
+    }
 
+    private void ApplySettings(AppSettings settings)
+    {
+        var next = settings.Normalize();
         if (!_hotkeys.Register(next.Hotkeys, out var error))
         {
             _hotkeys.Register(_settings.Hotkeys, out _);
@@ -98,13 +94,26 @@ public sealed class TrayApplicationContext : ApplicationContext
         var enabledChanged = _settings.Enabled != next.Enabled;
         _settings = next;
         _store.Save(_settings);
+        _syncingEnabled = true;
         _enabledItem.Checked = _settings.Enabled;
+        _syncingEnabled = false;
         _coordinator.ApplySettings(_settings);
 
         if (enabledChanged)
         {
             EnabledChanged?.Invoke();
         }
+    }
+
+    private void ShowSettings()
+    {
+        using var form = new SettingsForm(_settings);
+        if (form.ShowDialog() != DialogResult.OK)
+        {
+            return;
+        }
+
+        ApplySettings(form.Result);
     }
 
     protected override void Dispose(bool disposing)

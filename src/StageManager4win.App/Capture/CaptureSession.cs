@@ -19,23 +19,76 @@ internal sealed class CaptureSession : IDisposable
     public CaptureSession(nint hwnd, IDirect3DDevice device)
     {
         _device = device;
-        Item = GraphicsCaptureInterop.CreateItemForWindow(hwnd);
-        var size = Item.Size;
-        if (size.Width <= 0 || size.Height <= 0)
+        var item = GraphicsCaptureInterop.CreateItemForWindow(hwnd);
+        Direct3D11CaptureFramePool? pool = null;
+        GraphicsCaptureSession? session = null;
+        try
         {
-            throw new InvalidOperationException("The capture item has an empty size.");
+            var size = item.Size;
+            if (size.Width <= 0 || size.Height <= 0)
+            {
+                throw new InvalidOperationException("The capture item has an empty size.");
+            }
+
+            pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
+                device,
+                DirectXPixelFormat.B8G8R8A8UIntNormalized,
+                2,
+                size);
+            session = pool.CreateCaptureSession(item);
+            session.IsCursorCaptureEnabled = false;
+            item.Closed += OnItemClosed;
+            pool.FrameArrived += OnFrameArrived;
+            session.StartCapture();
+        }
+        catch
+        {
+            // Release a partially created session so repeated failures cannot leak.
+            try
+            {
+                item.Closed -= OnItemClosed;
+            }
+            catch (Exception exception)
+            {
+                Debug.WriteLine(exception);
+            }
+
+            try
+            {
+                if (pool is not null)
+                {
+                    pool.FrameArrived -= OnFrameArrived;
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.WriteLine(exception);
+            }
+
+            try
+            {
+                session?.Dispose();
+            }
+            catch (Exception exception)
+            {
+                Debug.WriteLine(exception);
+            }
+
+            try
+            {
+                pool?.Dispose();
+            }
+            catch (Exception exception)
+            {
+                Debug.WriteLine(exception);
+            }
+
+            throw;
         }
 
-        _pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
-            device,
-            DirectXPixelFormat.B8G8R8A8UIntNormalized,
-            2,
-            size);
-        _session = _pool.CreateCaptureSession(Item);
-        _session.IsCursorCaptureEnabled = false;
-        Item.Closed += OnItemClosed;
-        _pool.FrameArrived += OnFrameArrived;
-        _session.StartCapture();
+        Item = item;
+        _pool = pool;
+        _session = session;
     }
 
     public GraphicsCaptureItem Item { get; }

@@ -10,6 +10,7 @@ internal sealed class RenderThread : IDisposable
     private readonly BlockingCollection<RenderCommand> _commands = new();
     private readonly Dictionary<string, OverlayTarget> _targets = new();
     private readonly Dictionary<string, IReadOnlyList<TileVisual>> _tilesByMonitor = new();
+    private readonly Dictionary<string, bool> _visibleByMonitor = new(StringComparer.Ordinal);
     private readonly Thread _thread;
     private RenderDevice? _device;
     private CaptureManager? _capture;
@@ -25,6 +26,8 @@ internal sealed class RenderThread : IDisposable
             IsBackground = true
         };
     }
+
+    public event Action? DeviceLost;
 
     public void Start()
     {
@@ -68,15 +71,7 @@ internal sealed class RenderThread : IDisposable
             _thread.Join();
         }
 
-        _capture?.Dispose();
-        foreach (var target in _targets.Values)
-        {
-            target.Dispose();
-        }
-
-        _targets.Clear();
-        _tilesByMonitor.Clear();
-        _device?.Dispose();
+        ReleaseResources();
         _commands.Dispose();
     }
 
@@ -89,6 +84,11 @@ internal sealed class RenderThread : IDisposable
         catch (Exception exception)
         {
             Debug.WriteLine(exception);
+            if (DeviceLoss.IsDeviceLost(exception))
+            {
+                RaiseDeviceLost();
+            }
+
             return;
         }
 
@@ -104,55 +104,136 @@ internal sealed class RenderThread : IDisposable
         catch (Exception exception)
         {
             Debug.WriteLine(exception);
+            if (DeviceLoss.IsDeviceLost(exception))
+            {
+                ReleaseResources();
+                RaiseDeviceLost();
+                return;
+            }
         }
 
         var dirty = false;
-        while (true)
+        try
         {
-            var stop = false;
-            while (_commands.TryTake(out var command))
+            while (true)
             {
-                stop = Handle(command, device, ref dirty);
-                if (stop)
+                var stop = false;
+                while (_commands.TryTake(out var command))
+                {
+                    try
+                    {
+                        stop = Handle(command, device, ref dirty);
+                    }
+                    catch (Exception exception) when (!DeviceLoss.IsDeviceLost(exception))
+                    {
+                        Debug.WriteLine(exception);
+                    }
+
+                    if (stop)
+                    {
+                        break;
+                    }
+                }
+
+                if (stop || _commands.IsCompleted)
                 {
                     break;
                 }
-            }
 
-            if (stop || _commands.IsCompleted)
-            {
-                break;
-            }
-
-            if (_capture is not null)
-            {
-                var now = Stopwatch.GetTimestamp();
-                var interval = Math.Max(1, Stopwatch.Frequency / Math.Max(1, _previewFps));
-                foreach (var target in _targets.Values)
+                if (_capture is not null)
                 {
-                    if (target.DrawLiveFrames(_capture, now, interval))
+                    var now = Stopwatch.GetTimestamp();
+                    var interval = Math.Max(1, Stopwatch.Frequency / Math.Max(1, _previewFps));
+                    foreach (var target in _targets.Values)
                     {
-                        dirty = true;
+                        try
+                        {
+                            if (target.DrawLiveFrames(_capture, now, interval))
+                            {
+                                dirty = true;
+                            }
+                        }
+                        catch (Exception exception) when (!DeviceLoss.IsDeviceLost(exception))
+                        {
+                            Debug.WriteLine(exception);
+                        }
                     }
                 }
-            }
 
-            if (dirty)
-            {
-                try
+                if (dirty)
                 {
-                    device.DComp.Commit();
-                }
-                catch (Exception exception)
-                {
-                    Debug.WriteLine(exception);
+                    try
+                    {
+                        device.DComp.Commit();
+                    }
+                    catch (Exception exception) when (!DeviceLoss.IsDeviceLost(exception))
+                    {
+                        Debug.WriteLine(exception);
+                    }
+
+                    dirty = false;
                 }
 
-                dirty = false;
+                Thread.Sleep(4);
             }
-
-            Thread.Sleep(4);
         }
+        catch (Exception exception) when (DeviceLoss.IsDeviceLost(exception))
+        {
+            Debug.WriteLine(exception);
+            ReleaseResources();
+            RaiseDeviceLost();
+        }
+    }
+
+    private void RaiseDeviceLost()
+    {
+        try
+        {
+            DeviceLost?.Invoke();
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine(exception);
+        }
+    }
+
+    private void ReleaseResources()
+    {
+        try
+        {
+            _capture?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine(exception);
+        }
+
+        _capture = null;
+        foreach (var target in _targets.Values)
+        {
+            try
+            {
+                target.Dispose();
+            }
+            catch (Exception exception)
+            {
+                Debug.WriteLine(exception);
+            }
+        }
+
+        _targets.Clear();
+        _tilesByMonitor.Clear();
+        _visibleByMonitor.Clear();
+        try
+        {
+            _device?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine(exception);
+        }
+
+        _device = null;
     }
 
     private bool Handle(RenderCommand command, RenderDevice device, ref bool dirty)
@@ -171,6 +252,7 @@ internal sealed class RenderThread : IDisposable
                     create.MonitorId,
                     create.Dpi);
                 _tilesByMonitor.Remove(create.MonitorId);
+                _visibleByMonitor.Remove(create.MonitorId);
                 SyncCaptureRequests();
                 dirty = true;
                 break;
@@ -179,6 +261,7 @@ internal sealed class RenderThread : IDisposable
                 {
                     target.Update(update.Tiles, update.Visible);
                     _tilesByMonitor[update.MonitorId] = update.Tiles;
+                    _visibleByMonitor[update.MonitorId] = update.Visible;
                     SyncCaptureRequests();
                     dirty = true;
                 }
@@ -195,6 +278,9 @@ internal sealed class RenderThread : IDisposable
             case RenderCommand.SetPreviewFps fps:
                 _previewFps = fps.Fps;
                 break;
+            case RenderCommand.SetCapturePaused paused:
+                _capture?.Pause(paused.Paused);
+                break;
             case RenderCommand.RemoveOverlay remove:
                 if (_targets.Remove(remove.MonitorId, out var removed))
                 {
@@ -203,6 +289,7 @@ internal sealed class RenderThread : IDisposable
                 }
 
                 _tilesByMonitor.Remove(remove.MonitorId);
+                _visibleByMonitor.Remove(remove.MonitorId);
                 SyncCaptureRequests();
                 break;
             case RenderCommand.StopRenderThread:
@@ -220,8 +307,14 @@ internal sealed class RenderThread : IDisposable
         }
 
         var requests = new List<CaptureRequest>();
-        foreach (var tiles in _tilesByMonitor.Values)
+        foreach (var (monitorId, tiles) in _tilesByMonitor)
         {
+            // Hidden strips must not keep capture sessions alive.
+            if (!_visibleByMonitor.GetValueOrDefault(monitorId))
+            {
+                continue;
+            }
+
             foreach (var tile in tiles)
             {
                 if (tile.SourceHwnd != 0)

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using StageManager4win.Core.Capture;
 using StageManager4win.Core.Windows;
+using StageManager4win.Rendering;
 using Windows.Graphics;
 using Windows.Graphics.Capture;
 using Windows.Graphics.DirectX.Direct3D11;
@@ -152,7 +153,7 @@ internal sealed class CaptureManager : IDisposable
                 session.Closed += () => _closed.Enqueue(window);
                 _sessions[window] = session;
             }
-            catch (Exception exception)
+            catch (Exception exception) when (!DeviceLoss.IsDeviceLost(exception))
             {
                 Debug.WriteLine(exception);
                 _failed.Add(window);
@@ -177,11 +178,18 @@ internal sealed class CaptureManager : IDisposable
 
     private void DisposeSessions()
     {
-        foreach (var session in _sessions.Values)
-        {
-            session.Dispose();
-        }
-
+        var sessions = _sessions.Values.ToArray();
         _sessions.Clear();
+        foreach (var session in sessions)
+        {
+            try
+            {
+                session.Dispose();
+            }
+            catch (Exception exception)
+            {
+                Debug.WriteLine(exception);
+            }
+        }
     }
 }

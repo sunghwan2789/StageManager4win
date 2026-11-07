@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using Microsoft.Win32;
 using StageManager4win.Core.Layout;
 using StageManager4win.Core.Settings;
 using StageManager4win.Core.Stages;
@@ -19,7 +20,7 @@ internal sealed class StageCoordinator : IDisposable
     private readonly DisplayManager _display = new();
     private readonly WindowSource _source = new();
     private readonly WindowEventWatcher _watcher = new();
-    private readonly RenderThread _render = new();
+    private RenderThread _render;
     private readonly StageModel _model;
     private readonly Dictionary<string, OverlayWindow> _overlays = new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool> _visibleByMonitor = new(StringComparer.Ordinal);
@@ -37,17 +38,23 @@ internal sealed class StageCoordinator : IDisposable
     private bool _rebuildPending;
     private bool _started;
     private bool _disposed;
+    private bool _sessionPaused;
+    private bool _fullscreenPaused;
 
     public StageCoordinator(SettingsStore settingsStore)
     {
         _store = settingsStore;
         _settings = _store.Load();
         _model = new StageModel(_settings.WindowMode);
+        _render = new RenderThread();
+        _render.DeviceLost += OnDeviceLost;
         _debounce.Tick += (_, _) => OnDebounceTick();
         _cycleReset.Tick += (_, _) => OnCycleResetTick();
     }
 
     public event Action<string>? StatusMessage;
+
+    private bool Suspended => _sessionPaused || _fullscreenPaused;
 
     public void Start()
     {
@@ -58,8 +65,6 @@ internal sealed class StageCoordinator : IDisposable
 
         _started = true;
         _monitors = _display.GetMonitors();
-        _render.Start();
-        _render.Post(new RenderCommand.SetPreviewFps(_settings.PreviewFps));
         foreach (var monitor in _monitors)
         {
             var overlay = new OverlayWindow(monitor);
@@ -72,13 +77,37 @@ internal sealed class StageCoordinator : IDisposable
             overlay.Show();
             _overlays[monitorId] = overlay;
             _dpiByMonitor[monitorId] = monitor.Dpi;
-            _render.Post(new RenderCommand.CreateOverlay(monitorId, overlay.Handle, monitor.Dpi));
         }
 
-        _model.Reset(Enumerate(), _source.GetForegroundWindow());
+        var foreground = _source.GetForegroundWindow();
+        _model.Reset(Enumerate(), foreground);
+        _fullscreenPaused = IsFullscreen(foreground);
+        StartRenderThread();
+        SystemEvents.SessionSwitch += OnSessionSwitch;
         _watcher.Raised += OnWindowEvent;
         _watcher.Start();
         Refresh();
+    }
+
+    private void StartRenderThread()
+    {
+        _render.Start();
+        _render.Post(new RenderCommand.SetPreviewFps(_settings.PreviewFps));
+        if (Suspended)
+        {
+            _render.Post(new RenderCommand.SetCapturePaused(true));
+        }
+
+        foreach (var monitor in _monitors)
+        {
+            if (_overlays.TryGetValue(monitor.Id, out var overlay))
+            {
+                _render.Post(new RenderCommand.CreateOverlay(
+                    monitor.Id,
+                    overlay.Handle,
+                    _dpiByMonitor.GetValueOrDefault(monitor.Id, monitor.Dpi)));
+            }
+        }
     }
 
     public void ApplySettings(AppSettings settings)
@@ -163,6 +192,7 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         _disposed = true;
+        SystemEvents.SessionSwitch -= OnSessionSwitch;
         _watcher.Raised -= OnWindowEvent;
         _watcher.Dispose();
         _debounce.Stop();
@@ -252,13 +282,97 @@ internal sealed class StageCoordinator : IDisposable
             }
         }
 
-        if (_source.GetForegroundWindow() is { } foreground && _model.Windows.ContainsKey(foreground))
+        var foreground = _source.GetForegroundWindow();
+        if (foreground is { } window && _model.Windows.ContainsKey(window))
         {
-            _model.SetForeground(foreground);
+            _model.SetForeground(window);
+        }
+
+        var fullscreen = IsFullscreen(foreground);
+        if (fullscreen != _fullscreenPaused)
+        {
+            _fullscreenPaused = fullscreen;
+            _render.Post(new RenderCommand.SetCapturePaused(Suspended));
         }
 
         Refresh();
     }
+
+    private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
+    {
+        var paused = e.Reason switch
+        {
+            SessionSwitchReason.SessionLock
+                or SessionSwitchReason.ConsoleDisconnect
+                or SessionSwitchReason.RemoteDisconnect => true,
+            SessionSwitchReason.SessionUnlock
+                or SessionSwitchReason.ConsoleConnect
+                or SessionSwitchReason.RemoteConnect => false,
+            _ => (bool?)null
+        };
+        if (paused is not { } value)
+        {
+            return;
+        }
+
+        RunOnUiThread(() => SetSessionPaused(value));
+    }
+
+    private void SetSessionPaused(bool paused)
+    {
+        if (_disposed || _sessionPaused == paused)
+        {
+            return;
+        }
+
+        _sessionPaused = paused;
+        _render.Post(new RenderCommand.SetCapturePaused(Suspended));
+        if (paused)
+        {
+            Refresh();
+        }
+        else
+        {
+            Reconcile();
+        }
+    }
+
+    private void OnDeviceLost() => RunOnUiThread(RecoverRenderThread);
+
+    private void RecoverRenderThread()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _render.Dispose();
+        _render = new RenderThread();
+        _render.DeviceLost += OnDeviceLost;
+        StartRenderThread();
+        Reconcile();
+        StatusMessage?.Invoke("The graphics device was reset; live previews restarted.");
+    }
+
+    private void RunOnUiThread(Action action)
+    {
+        if (_overlays.Values.FirstOrDefault() is not { IsHandleCreated: true } overlay)
+        {
+            return;
+        }
+
+        try
+        {
+            overlay.BeginInvoke(action);
+        }
+        catch (Exception)
+        {
+            // The overlay can be gone while the app is shutting down.
+        }
+    }
+
+    private bool IsFullscreen(WindowId? window) =>
+        window is { } value && _source.IsFullscreen((nint)value.Value);
 
     private void Refresh()
     {
@@ -335,6 +449,7 @@ internal sealed class StageCoordinator : IDisposable
             }
 
             var visible = _settings.Enabled
+                && !Suspended
                 && _visibleByMonitor.GetValueOrDefault(monitor.Id, true);
             overlay.SetTiles(tiles);
             overlay.SetVisible(visible);

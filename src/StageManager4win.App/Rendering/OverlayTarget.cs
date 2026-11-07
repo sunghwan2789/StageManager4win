@@ -183,7 +183,7 @@ internal sealed class OverlayTarget : IDisposable
 
                 updated = true;
             }
-            catch (Exception exception)
+            catch (Exception exception) when (!DeviceLoss.IsDeviceLost(exception))
             {
                 Debug.WriteLine(exception);
                 capture.ReportFailure(tile.Window);

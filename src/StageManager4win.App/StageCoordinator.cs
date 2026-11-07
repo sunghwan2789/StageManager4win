@@ -26,6 +26,7 @@ internal sealed class StageCoordinator : IDisposable
     private readonly Dictionary<string, int> _firstVisibleIndex = new(StringComparer.Ordinal);
     private readonly Dictionary<string, uint> _dpiByMonitor = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IconBitmap?> _icons = new(StringComparer.Ordinal);
+    private readonly Dictionary<WindowId, double> _lastAspect = new();
     private readonly IconBitmap _fallbackIcon = IconBitmap.Solid(1, 1, FallbackTileColor);
     private readonly System.Windows.Forms.Timer _debounce = new() { Interval = 100 };
     private readonly System.Windows.Forms.Timer _cycleReset = new() { Interval = 2000 };
@@ -58,6 +59,7 @@ internal sealed class StageCoordinator : IDisposable
         _started = true;
         _monitors = _display.GetMonitors();
         _render.Start();
+        _render.Post(new RenderCommand.SetPreviewFps(_settings.PreviewFps));
         foreach (var monitor in _monitors)
         {
             var overlay = new OverlayWindow(monitor);
@@ -83,6 +85,7 @@ internal sealed class StageCoordinator : IDisposable
     {
         _settings = settings.Normalize();
         _model.SetMode(_settings.WindowMode);
+        _render.Post(new RenderCommand.SetPreviewFps(_settings.PreviewFps));
         if (_settings.Enabled)
         {
             Reconcile();
@@ -211,6 +214,7 @@ internal sealed class StageCoordinator : IDisposable
 
     private void Rebuild()
     {
+        _lastAspect.Clear();
         _model.Reset(Enumerate(), _source.GetForegroundWindow());
         Refresh();
     }
@@ -222,6 +226,7 @@ internal sealed class StageCoordinator : IDisposable
         foreach (var id in _model.Windows.Keys.Where(id => !present.Contains(id)).ToArray())
         {
             _model.Remove(id);
+            _lastAspect.Remove(id);
         }
 
         foreach (var snapshot in snapshots)
@@ -289,9 +294,19 @@ internal sealed class StageCoordinator : IDisposable
                     continue;
                 }
 
-                var aspect = snapshot.Bounds.Height > 0
+                var boundsAspect = snapshot.Bounds.Height > 0
                     ? (double)snapshot.Bounds.Width / snapshot.Bounds.Height
                     : 4.0 / 3.0;
+                // A minimized window reports its icon-rail rect; keep its last real
+                // aspect so the tile keeps the last captured frame.
+                var aspect = snapshot.IsMinimized
+                    ? _lastAspect.GetValueOrDefault(id, boundsAspect)
+                    : boundsAspect;
+                if (!snapshot.IsMinimized)
+                {
+                    _lastAspect[id] = boundsAspect;
+                }
+
                 items.Add(new StripItem(id, aspect));
             }
 

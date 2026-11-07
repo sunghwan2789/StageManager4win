@@ -34,15 +34,10 @@ internal static class TilePainter
             throw new ArgumentException("Icon pixel buffer is too small.", nameof(bitmap));
         }
 
-        surface.BeginDraw(null, typeof(ID3D11Texture2D).GUID, out var update, out var offset);
         ID3D11Texture2D? iconTexture = null;
         ID3D11ShaderResourceView? view = null;
-        ID3D11RenderTargetView? target = null;
         try
         {
-            var texture = (ID3D11Texture2D)update;
-            device.D3D11Device.CreateRenderTargetView(texture, null, out target);
-
             fixed (byte* pixels = bitmap.Bgra)
             {
                 var description = new D3D11_TEXTURE2D_DESC
@@ -75,6 +70,66 @@ internal static class TilePainter
                 UvOffset = new Vector2((1f - scale) / 2f),
                 Background = new Vector4(0.08f, 0.08f, 0.10f, 1f)
             };
+            Draw(device, surface, view, constants, width, height);
+        }
+        finally
+        {
+            if (view is not null)
+            {
+                Marshal.ReleaseComObject(view);
+            }
+
+            if (iconTexture is not null)
+            {
+                Marshal.ReleaseComObject(iconTexture);
+            }
+        }
+    }
+
+    public static unsafe void PaintFrame(
+        RenderDevice device,
+        IDCompositionSurface surface,
+        ID3D11Texture2D texture,
+        uint width,
+        uint height,
+        Vector2 uvScale)
+    {
+        ID3D11ShaderResourceView? view = null;
+        try
+        {
+            device.D3D11Device.CreateShaderResourceView(texture, null, out view);
+            var constants = new TileConstants
+            {
+                UvScale = uvScale,
+                UvOffset = Vector2.Zero,
+                Background = new Vector4(0f, 0f, 0f, 1f)
+            };
+            Draw(device, surface, view, constants, width, height);
+        }
+        finally
+        {
+            if (view is not null)
+            {
+                Marshal.ReleaseComObject(view);
+            }
+        }
+    }
+
+    private static unsafe void Draw(
+        RenderDevice device,
+        IDCompositionSurface surface,
+        ID3D11ShaderResourceView view,
+        TileConstants constants,
+        uint width,
+        uint height)
+    {
+        surface.BeginDraw(null, typeof(ID3D11Texture2D).GUID, out var update, out var offset);
+        ID3D11RenderTargetView? target = null;
+        try
+        {
+            var texture = (ID3D11Texture2D)update;
+            device.D3D11Device.CreateRenderTargetView(texture, null, out target);
+
             var context = device.Context;
             context.Map(device.Constants, 0, D3D11_MAP.D3D11_MAP_WRITE_DISCARD, 0, out var mapped);
             *(TileConstants*)mapped.pData = constants;
@@ -106,16 +161,6 @@ internal static class TilePainter
             if (target is not null)
             {
                 Marshal.ReleaseComObject(target);
-            }
-
-            if (view is not null)
-            {
-                Marshal.ReleaseComObject(view);
-            }
-
-            if (iconTexture is not null)
-            {
-                Marshal.ReleaseComObject(iconTexture);
             }
 
             Marshal.ReleaseComObject(update);

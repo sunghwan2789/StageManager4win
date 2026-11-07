@@ -1,6 +1,11 @@
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using StageManager4win.Capture;
 using StageManager4win.Core.Windows;
+using StageManager4win.Interop;
+using Windows.Graphics;
+using Windows.Graphics.DirectX;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Direct2D.Common;
 using Windows.Win32.Graphics.DirectComposition;
@@ -34,12 +39,25 @@ internal sealed class OverlayTarget : IDisposable
 
     public void Update(IReadOnlyList<TileVisual> tiles, bool visible)
     {
-        ClearTiles();
         var scale = _dpi / 96.0;
+        var next = new List<TileTarget>(tiles.Count);
         foreach (var tile in tiles)
         {
             var width = Math.Max(1, (int)Math.Ceiling(tile.BoundsDip.Width * scale));
             var height = Math.Max(1, (int)Math.Ceiling(tile.BoundsDip.Height * scale));
+            var existing = _tiles.Find(candidate =>
+                candidate.Window == tile.Window
+                && candidate.Width == width
+                && candidate.Height == height);
+            if (existing is not null)
+            {
+                _tiles.Remove(existing);
+                existing.Visual.SetOffsetX((float)(tile.BoundsDip.X * scale));
+                existing.Visual.SetOffsetY((float)(tile.BoundsDip.Y * scale));
+                existing.IsMinimized = tile.IsMinimized;
+                next.Add(existing);
+                continue;
+            }
 
             _device.DComp.CreateVisual(out var visual);
             _device.DComp.CreateSurface(
@@ -79,11 +97,104 @@ internal sealed class OverlayTarget : IDisposable
             _device.DComp.CreateEffectGroup(out var effect);
             visual.SetEffect(effect);
             _root.AddVisual(visual, true, null);
-            _tiles.Add(new TileTarget(tile.Window, (float)width, (float)height, visual, surface, clip, effect));
+            next.Add(new TileTarget(
+                tile.Window,
+                width,
+                height,
+                visual,
+                surface,
+                clip,
+                effect,
+                tile.IsMinimized));
         }
 
+        foreach (var stale in _tiles)
+        {
+            Release(stale);
+        }
+
+        _tiles.Clear();
+        _tiles.AddRange(next);
         _rootEffect.SetOpacity(visible ? 1f : 0f);
         ApplyHover();
+    }
+
+    public bool DrawLiveFrames(CaptureManager capture, long timestamp, long interval)
+    {
+        var updated = false;
+        foreach (var tile in _tiles)
+        {
+            // Minimized windows keep their last frame at half opacity.
+            if (tile.IsMinimized || timestamp - tile.LastFrame < interval)
+            {
+                continue;
+            }
+
+            var frame = capture.TryGetFrame(tile.Window);
+            if (frame is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                var description = frame.Surface.Description;
+                if (description.Format != DirectXPixelFormat.B8G8R8A8UIntNormalized)
+                {
+                    capture.ReportFailure(tile.Window);
+                    continue;
+                }
+
+                var content = frame.ContentSize;
+                var contentWidth = content.Width > 0 ? content.Width : description.Width;
+                var contentHeight = content.Height > 0 ? content.Height : description.Height;
+                var uvScale = new Vector2(
+                    description.Width > 0 ? (float)contentWidth / description.Width : 1f,
+                    description.Height > 0 ? (float)contentHeight / description.Height : 1f);
+
+                var texture = GraphicsCaptureInterop.GetTexture(frame.Surface);
+                try
+                {
+                    TilePainter.PaintFrame(
+                        _device,
+                        tile.Surface,
+                        texture,
+                        (uint)tile.Width,
+                        (uint)tile.Height,
+                        uvScale);
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(texture);
+                }
+
+                tile.LastFrame = timestamp;
+                ApplyHover();
+                if (contentWidth != tile.ContentWidth || contentHeight != tile.ContentHeight)
+                {
+                    tile.ContentWidth = contentWidth;
+                    tile.ContentHeight = contentHeight;
+                    capture.RecreatePool(tile.Window, new SizeInt32
+                    {
+                        Width = contentWidth,
+                        Height = contentHeight
+                    });
+                }
+
+                updated = true;
+            }
+            catch (Exception exception)
+            {
+                Debug.WriteLine(exception);
+                capture.ReportFailure(tile.Window);
+            }
+            finally
+            {
+                frame.Dispose();
+            }
+        }
+
+        return updated;
     }
 
     public void SetHover(WindowId? window)
@@ -94,7 +205,12 @@ internal sealed class OverlayTarget : IDisposable
 
     public void Dispose()
     {
-        ClearTiles();
+        foreach (var tile in _tiles)
+        {
+            Release(tile);
+        }
+
+        _tiles.Clear();
         Marshal.ReleaseComObject(_rootEffect);
         Marshal.ReleaseComObject(_root);
         Marshal.ReleaseComObject(_target);
@@ -105,7 +221,8 @@ internal sealed class OverlayTarget : IDisposable
         foreach (var tile in _tiles)
         {
             var hovered = _hover == tile.Window;
-            tile.Effect.SetOpacity(_hover is null || hovered ? 1f : 0.92f);
+            var baseOpacity = tile.IsMinimized ? 0.5f : 1f;
+            tile.Effect.SetOpacity(_hover is null || hovered ? baseOpacity : baseOpacity * 0.92f);
             if (!hovered)
             {
                 tile.Visual.SetTransform((IDCompositionTransform?)null);
@@ -118,26 +235,57 @@ internal sealed class OverlayTarget : IDisposable
         }
     }
 
-    private void ClearTiles()
+    private void Release(TileTarget tile)
     {
-        foreach (var tile in _tiles)
-        {
-            _root.RemoveVisual(tile.Visual);
-            Marshal.ReleaseComObject(tile.Effect);
-            Marshal.ReleaseComObject(tile.Clip);
-            Marshal.ReleaseComObject(tile.Surface);
-            Marshal.ReleaseComObject(tile.Visual);
-        }
-
-        _tiles.Clear();
+        _root.RemoveVisual(tile.Visual);
+        Marshal.ReleaseComObject(tile.Effect);
+        Marshal.ReleaseComObject(tile.Clip);
+        Marshal.ReleaseComObject(tile.Surface);
+        Marshal.ReleaseComObject(tile.Visual);
     }
 
-    private sealed record TileTarget(
-        WindowId Window,
-        float Width,
-        float Height,
-        IDCompositionVisual Visual,
-        IDCompositionSurface Surface,
-        IDCompositionRectangleClip Clip,
-        IDCompositionEffectGroup Effect);
+    private sealed class TileTarget
+    {
+        public TileTarget(
+            WindowId window,
+            float width,
+            float height,
+            IDCompositionVisual visual,
+            IDCompositionSurface surface,
+            IDCompositionRectangleClip clip,
+            IDCompositionEffectGroup effect,
+            bool isMinimized)
+        {
+            Window = window;
+            Width = width;
+            Height = height;
+            Visual = visual;
+            Surface = surface;
+            Clip = clip;
+            Effect = effect;
+            IsMinimized = isMinimized;
+        }
+
+        public WindowId Window { get; }
+
+        public float Width { get; }
+
+        public float Height { get; }
+
+        public IDCompositionVisual Visual { get; }
+
+        public IDCompositionSurface Surface { get; }
+
+        public IDCompositionRectangleClip Clip { get; }
+
+        public IDCompositionEffectGroup Effect { get; }
+
+        public bool IsMinimized { get; set; }
+
+        public long LastFrame { get; set; }
+
+        public int ContentWidth { get; set; }
+
+        public int ContentHeight { get; set; }
+    }
 }

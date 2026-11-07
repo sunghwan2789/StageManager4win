@@ -13,6 +13,8 @@ internal abstract record RenderCommand
 
     internal sealed record SetOverlayHover(string MonitorId, WindowId? Window) : RenderCommand;
 
+    internal sealed record SetPreviewFps(int Fps) : RenderCommand;
+
     internal sealed record RemoveOverlay(string MonitorId) : RenderCommand;
 
     internal sealed record StopRenderThread : RenderCommand;

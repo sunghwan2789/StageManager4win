@@ -1,0 +1,128 @@
+using System.Diagnostics;
+using StageManager4win.Interop;
+using Windows.Graphics;
+using Windows.Graphics.Capture;
+using Windows.Graphics.DirectX;
+using Windows.Graphics.DirectX.Direct3D11;
+
+namespace StageManager4win.Capture;
+
+internal sealed class CaptureSession : IDisposable
+{
+    private readonly IDirect3DDevice _device;
+    private readonly Direct3D11CaptureFramePool _pool;
+    private readonly GraphicsCaptureSession _session;
+    private readonly object _gate = new();
+    private Direct3D11CaptureFrame? _frame;
+    private bool _disposed;
+
+    public CaptureSession(nint hwnd, IDirect3DDevice device)
+    {
+        _device = device;
+        Item = GraphicsCaptureInterop.CreateItemForWindow(hwnd);
+        var size = Item.Size;
+        if (size.Width <= 0 || size.Height <= 0)
+        {
+            throw new InvalidOperationException("The capture item has an empty size.");
+        }
+
+        _pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
+            device,
+            DirectXPixelFormat.B8G8R8A8UIntNormalized,
+            2,
+            size);
+        _session = _pool.CreateCaptureSession(Item);
+        _session.IsCursorCaptureEnabled = false;
+        Item.Closed += OnItemClosed;
+        _pool.FrameArrived += OnFrameArrived;
+        _session.StartCapture();
+    }
+
+    public GraphicsCaptureItem Item { get; }
+
+    public event Action? Closed;
+
+    public Direct3D11CaptureFrame? TryGetFrame()
+    {
+        lock (_gate)
+        {
+            var frame = _frame;
+            _frame = null;
+            return frame;
+        }
+    }
+
+    public void RecreatePool(SizeInt32 size)
+    {
+        if (size.Width <= 0 || size.Height <= 0 || _disposed)
+        {
+            return;
+        }
+
+        _pool.Recreate(_device, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, size);
+    }
+
+    public void Dispose()
+    {
+        Direct3D11CaptureFrame? frame;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            frame = _frame;
+            _frame = null;
+        }
+
+        _pool.FrameArrived -= OnFrameArrived;
+        Item.Closed -= OnItemClosed;
+        try
+        {
+            _session.Dispose();
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine(exception);
+        }
+
+        _pool.Dispose();
+        frame?.Dispose();
+    }
+
+    private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
+    {
+        Direct3D11CaptureFrame? frame;
+        try
+        {
+            frame = sender.TryGetNextFrame();
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine(exception);
+            return;
+        }
+
+        if (frame is null)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                frame.Dispose();
+                return;
+            }
+
+            var previous = _frame;
+            _frame = frame;
+            previous?.Dispose();
+        }
+    }
+
+    private void OnItemClosed(GraphicsCaptureItem sender, object args) => Closed?.Invoke();
+}

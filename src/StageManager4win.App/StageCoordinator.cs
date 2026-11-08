@@ -379,25 +379,44 @@ internal sealed class StageCoordinator : IDisposable
             var ordered = new List<WindowId>();
             foreach (var identity in monitor.StripOrder)
             {
-                foreach (var id in state.Strip)
+                if (FindWindow(state.Strip, identity, used) is { } id)
                 {
-                    if (used.Contains(id) || !_model.Windows.TryGetValue(id, out var snapshot))
-                    {
-                        continue;
-                    }
-
-                    if (snapshot.AppId == identity.AppId && snapshot.Title == identity.Title)
-                    {
-                        ordered.Add(id);
-                        used.Add(id);
-                        break;
-                    }
+                    ordered.Add(id);
+                    used.Add(id);
                 }
             }
 
             _model.ReorderStrip(monitor.MonitorId, ordered);
 
-            if (monitor.Foreground is { } foreground)
+            if (monitor.Stage is { Count: > 0 } stageOrder)
+            {
+                var staged = new HashSet<WindowId>();
+                var stage = new List<WindowId>();
+                foreach (var identity in stageOrder)
+                {
+                    if (FindWindow(state.Strip, identity, staged) is { } id)
+                    {
+                        stage.Add(id);
+                        staged.Add(id);
+                    }
+                }
+
+                var strip = state.Strip.Where(id => !staged.Contains(id)).ToList();
+                var foregroundId = monitor.Foreground is { } foregroundIdentity
+                    ? FindWindow(state.Strip, foregroundIdentity, new HashSet<WindowId>())
+                    : null;
+                var activeAppId = foregroundId is { } activeId
+                    && _model.Windows.TryGetValue(activeId, out var foregroundSnapshot)
+                        ? foregroundSnapshot.AppId
+                        : null;
+                _model.Restore(new MonitorState(
+                    monitor.MonitorId,
+                    stage,
+                    strip,
+                    foregroundId,
+                    activeAppId));
+            }
+            else if (monitor.Foreground is { } foreground)
             {
                 foreach (var snapshot in _model.Windows.Values)
                 {
@@ -411,6 +430,25 @@ internal sealed class StageCoordinator : IDisposable
                 }
             }
         }
+    }
+
+    private WindowId? FindWindow(
+        IReadOnlyList<WindowId> candidates,
+        WindowIdentity identity,
+        HashSet<WindowId> used)
+    {
+        foreach (var id in candidates)
+        {
+            if (!used.Contains(id)
+                && _model.Windows.TryGetValue(id, out var snapshot)
+                && snapshot.AppId == identity.AppId
+                && snapshot.Title == identity.Title)
+            {
+                return id;
+            }
+        }
+
+        return null;
     }
 
     private void ScheduleWorkspaceSave()
@@ -442,6 +480,15 @@ internal sealed class StageCoordinator : IDisposable
                 }
             }
 
+            var stage = new List<WindowIdentity>(state.Stage.Count);
+            foreach (var id in state.Stage)
+            {
+                if (_model.Windows.TryGetValue(id, out var snapshot))
+                {
+                    stage.Add(new WindowIdentity(snapshot.AppId, snapshot.Title));
+                }
+            }
+
             WindowIdentity? foreground = null;
             if (state.Foreground is { } foregroundId
                 && _model.Windows.TryGetValue(foregroundId, out var foregroundSnapshot))
@@ -449,7 +496,7 @@ internal sealed class StageCoordinator : IDisposable
                 foreground = new WindowIdentity(foregroundSnapshot.AppId, foregroundSnapshot.Title);
             }
 
-            monitors.Add(new MonitorWorkspace(monitorId, strip, foreground));
+            monitors.Add(new MonitorWorkspace(monitorId, strip, foreground, stage));
         }
 
         try

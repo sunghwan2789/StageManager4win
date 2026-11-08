@@ -41,4 +41,36 @@ public sealed class WorkspaceStateStoreTests : IDisposable
 
         Assert.Empty(loaded.Monitors);
     }
+
+    [Fact]
+    public void Stage_RoundTrips()
+    {
+        var store = new WorkspaceStateStore(_dir);
+        store.Save(new WorkspaceState(new[]
+        {
+            new MonitorWorkspace(
+                "M1",
+                new[] { new WindowIdentity("A", "a1") },
+                new WindowIdentity("B", "b1"),
+                new[] { new WindowIdentity("B", "b1") })
+        }));
+
+        var loaded = store.Load();
+        var monitor = Assert.Single(loaded.Monitors);
+        Assert.NotNull(monitor.Stage);
+        Assert.Single(monitor.Stage!);
+        Assert.Equal("B", monitor.Stage![0].AppId);
+    }
+
+    [Fact]
+    public void Load_WithoutStage_LeavesItNull()
+    {
+        File.WriteAllText(
+            Path.Combine(_dir, "workspace.json"),
+            "{\"monitors\":[{\"monitorId\":\"M1\",\"stripOrder\":[],\"foreground\":null}]}");
+
+        var monitor = Assert.Single(new WorkspaceStateStore(_dir).Load().Monitors);
+
+        Assert.Null(monitor.Stage);
+    }
 }

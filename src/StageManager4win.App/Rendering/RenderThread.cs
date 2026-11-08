@@ -285,6 +285,14 @@ internal sealed class RenderThread : IDisposable
                 }
 
                 break;
+            case RenderCommand.UpdateDragGhost ghost:
+                if (_targets.TryGetValue(ghost.MonitorId, out var dragged))
+                {
+                    dragged.SetGhost(ghost.Window, ghost.DeltaX, ghost.DeltaY);
+                    dirty = true;
+                }
+
+                break;
             case RenderCommand.SetPreviewFps fps:
                 _previewFps = fps.Fps;
                 break;

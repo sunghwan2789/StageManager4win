@@ -21,6 +21,7 @@ internal static class TilePainter
         public Vector4 Background;
         public Vector4 BorderRect;
         public Vector4 BorderColor;
+        public Vector4 Tint;
     }
 
     public static unsafe void Paint(
@@ -30,7 +31,8 @@ internal static class TilePainter
         uint width,
         uint height,
         uint borderPixels,
-        uint borderBgra)
+        uint borderBgra,
+        float dim = 1f)
     {
         var expected = checked(bitmap.Width * bitmap.Height * 4);
         if (bitmap.Bgra.Length < expected)
@@ -74,7 +76,8 @@ internal static class TilePainter
                 UvOffset = new Vector2((1f - scale) / 2f),
                 Background = new Vector4(0.08f, 0.08f, 0.10f, 1f),
                 BorderRect = BorderInUv(borderPixels, width, height),
-                BorderColor = ToColor(borderBgra)
+                BorderColor = ToColor(borderBgra),
+                Tint = new Vector4(dim, dim, dim, 1f)
             };
             Draw(device, surface, view, constants, width, height);
         }
@@ -100,7 +103,8 @@ internal static class TilePainter
         uint height,
         Vector2 uvScale,
         uint borderPixels,
-        uint borderBgra)
+        uint borderBgra,
+        float dim = 1f)
     {
         ID3D11ShaderResourceView? view = null;
         try
@@ -112,7 +116,8 @@ internal static class TilePainter
                 UvOffset = Vector2.Zero,
                 Background = new Vector4(0f, 0f, 0f, 1f),
                 BorderRect = BorderInUv(borderPixels, width, height),
-                BorderColor = ToColor(borderBgra)
+                BorderColor = ToColor(borderBgra),
+                Tint = new Vector4(dim, dim, dim, 1f)
             };
             Draw(device, surface, view, constants, width, height);
         }

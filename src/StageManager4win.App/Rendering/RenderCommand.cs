@@ -13,6 +13,12 @@ internal abstract record RenderCommand
 
     internal sealed record SetOverlayHover(string MonitorId, WindowId? Window) : RenderCommand;
 
+    internal sealed record UpdateDragGhost(
+        string MonitorId,
+        WindowId? Window,
+        double DeltaX,
+        double DeltaY) : RenderCommand;
+
     internal sealed record SetPreviewFps(int Fps) : RenderCommand;
 
     internal sealed record SetCapturePaused(bool Paused) : RenderCommand;

@@ -13,6 +13,7 @@ internal static class TileShader
             float4 Background;
             float4 BorderRect;  // xy = border thickness in UV units
             float4 BorderColor;
+            float4 Tint;
         };
 
         Texture2D TileTexture : register(t0);
@@ -41,16 +42,16 @@ internal static class TileShader
                     || input.Uv.y < BorderRect.y
                     || input.Uv.y > 1.0 - BorderRect.y))
             {
-                return BorderColor;
+                return float4(BorderColor.rgb * Tint.x, BorderColor.a);
             }
 
             float2 local = (input.Uv - UvRect.zw) / UvRect.xy;
             if (any(local < 0.0) || any(local > 1.0))
             {
-                return Background;
+                return float4(Background.rgb * Tint.x, Background.a);
             }
 
-            return float4(TileTexture.Sample(TileSampler, local).rgb, 1.0);
+            return float4(TileTexture.Sample(TileSampler, local).rgb * Tint.x, 1.0);
         }
         """;
 

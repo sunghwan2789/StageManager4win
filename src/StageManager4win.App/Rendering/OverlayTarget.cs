@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using StageManager4win.Capture;
 using StageManager4win.Core.Diagnostics;
+using StageManager4win.Core.Layout;
 using StageManager4win.Core.Windows;
 using StageManager4win.Interop;
 using Windows.Graphics;
@@ -23,6 +24,9 @@ internal sealed class OverlayTarget : IDisposable
     private readonly List<TileTarget> _tiles = new();
     private readonly uint _dpi;
     private WindowId? _hover;
+    private WindowId? _ghost;
+    private float _ghostDeltaX;
+    private float _ghostDeltaY;
 
     public OverlayTarget(RenderDevice device, nint hwnd, string monitorId, uint dpi)
     {
@@ -44,6 +48,10 @@ internal sealed class OverlayTarget : IDisposable
         var next = new List<TileTarget>(tiles.Count);
         foreach (var tile in tiles)
         {
+            var card = TileStack.Card(tile.StackIndex);
+            var front = tile.Group == default ? tile.Window : tile.Group;
+            var baseOffsetX = (float)(tile.BoundsDip.X * scale);
+            var baseOffsetY = (float)(tile.BoundsDip.Y * scale);
             var borderPixels = tile.HighContrast
                 ? (uint)Math.Max(1, Math.Round(2 * scale))
                 : 0;
@@ -56,24 +64,30 @@ internal sealed class OverlayTarget : IDisposable
             if (existing is not null)
             {
                 _tiles.Remove(existing);
-                existing.Visual.SetOffsetX((float)(tile.BoundsDip.X * scale));
-                existing.Visual.SetOffsetY((float)(tile.BoundsDip.Y * scale));
+                existing.Front = front;
+                existing.CardOffsetY = card.OffsetY;
+                existing.CardScale = card.Scale;
+                existing.CardRotation = card.RotationDegrees;
+                existing.BaseOffsetX = baseOffsetX;
+                existing.BaseOffsetY = baseOffsetY;
                 existing.IsMinimized = tile.IsMinimized;
-                if (existing.BorderPixels != borderPixels || existing.BorderBgra != tile.BorderBgra)
+                var repaint = existing.Dim != card.Dim
+                              || existing.BorderPixels != borderPixels
+                              || existing.BorderBgra != tile.BorderBgra;
+                existing.Dim = card.Dim;
+                existing.BorderPixels = borderPixels;
+                existing.BorderBgra = tile.BorderBgra;
+                if (repaint && tile.Icon is { } existingIcon)
                 {
-                    existing.BorderPixels = borderPixels;
-                    existing.BorderBgra = tile.BorderBgra;
-                    if (tile.Icon is { } existingIcon)
-                    {
-                        TilePainter.Paint(
-                            _device,
-                            existing.Surface,
-                            existingIcon,
-                            (uint)existing.Width,
-                            (uint)existing.Height,
-                            borderPixels,
-                            tile.BorderBgra);
-                    }
+                    TilePainter.Paint(
+                        _device,
+                        existing.Surface,
+                        existingIcon,
+                        (uint)existing.Width,
+                        (uint)existing.Height,
+                        borderPixels,
+                        tile.BorderBgra,
+                        card.Dim);
                 }
 
                 next.Add(existing);
@@ -96,13 +110,14 @@ internal sealed class OverlayTarget : IDisposable
                     (uint)width,
                     (uint)height,
                     borderPixels,
-                    tile.BorderBgra);
+                    tile.BorderBgra,
+                    card.Dim);
             }
 
             visual.SetContent(surface);
             // DirectComposition coordinates are physical pixels, not DIPs.
-            visual.SetOffsetX((float)(tile.BoundsDip.X * scale));
-            visual.SetOffsetY((float)(tile.BoundsDip.Y * scale));
+            visual.SetOffsetX(baseOffsetX);
+            visual.SetOffsetY(baseOffsetY);
 
             _device.DComp.CreateRectangleClip(out var clip);
             clip.SetLeft(0);
@@ -127,6 +142,10 @@ internal sealed class OverlayTarget : IDisposable
             _root.AddVisual(visual, true, null);
             next.Add(new TileTarget(
                 tile.Window,
+                front,
+                card,
+                baseOffsetX,
+                baseOffsetY,
                 width,
                 height,
                 visual,
@@ -145,8 +164,13 @@ internal sealed class OverlayTarget : IDisposable
 
         _tiles.Clear();
         _tiles.AddRange(next);
+        foreach (var tile in next)
+        {
+            _root.AddVisual(tile.Visual, true, null);
+        }
+
         _rootEffect.SetOpacity(visible ? 1f : 0f);
-        ApplyHover();
+        ApplyTransforms();
     }
 
     public bool DrawLiveFrames(CaptureManager capture, long timestamp, long interval)
@@ -193,7 +217,8 @@ internal sealed class OverlayTarget : IDisposable
                         (uint)tile.Height,
                         uvScale,
                         tile.BorderPixels,
-                        tile.BorderBgra);
+                        tile.BorderBgra,
+                        tile.Dim);
                 }
                 finally
                 {
@@ -235,7 +260,15 @@ internal sealed class OverlayTarget : IDisposable
     public void SetHover(WindowId? window)
     {
         _hover = window;
-        ApplyHover();
+        ApplyTransforms();
+    }
+
+    public void SetGhost(WindowId? front, double deltaX, double deltaY)
+    {
+        _ghost = front;
+        _ghostDeltaX = (float)(deltaX * _dpi / 96.0);
+        _ghostDeltaY = (float)(deltaY * _dpi / 96.0);
+        ApplyTransforms();
     }
 
     public void Dispose()
@@ -251,23 +284,45 @@ internal sealed class OverlayTarget : IDisposable
         Marshal.ReleaseComObject(_target);
     }
 
+    private void ApplyTransforms()
+    {
+        foreach (var tile in _tiles)
+        {
+            var ghosted = _ghost is { } front && tile.Front == front;
+            tile.Visual.SetOffsetX(tile.BaseOffsetX + (ghosted ? _ghostDeltaX : 0f));
+            tile.Visual.SetOffsetY(tile.BaseOffsetY + (ghosted ? _ghostDeltaY : 0f));
+        }
+
+        ApplyHover();
+    }
+
     private unsafe void ApplyHover()
     {
         foreach (var tile in _tiles)
         {
-            var hovered = _hover == tile.Window;
+            var hovered = _ghost is null && _hover == tile.Window;
+            var active = _ghost is not null || _hover is null || hovered;
             var baseOpacity = tile.IsMinimized ? 0.5f : 1f;
-            tile.Effect.SetOpacity(_hover is null || hovered ? baseOpacity : baseOpacity * 0.92f);
-            if (!hovered)
+            tile.Effect.SetOpacity(active ? baseOpacity : baseOpacity * 0.92f);
+
+            var matrix = CardTransform(tile, _dpi / 96.0);
+            if (hovered)
             {
-                tile.Visual.SetTransform((IDCompositionTransform?)null);
-                continue;
+                var center = new Vector2(tile.Width / 2f, tile.Height / 2f);
+                matrix = Matrix3x2.CreateScale(1.05f, center) * matrix;
             }
 
-            var center = new Vector2(tile.Width / 2f, tile.Height / 2f);
-            var matrix = Matrix3x2.CreateScale(1.05f, center);
             tile.Visual.SetTransform((D2D_MATRIX_3X2_F*)&matrix);
         }
+    }
+
+    private static Matrix3x2 CardTransform(TileTarget tile, double dpiScale)
+    {
+        var center = new Vector2(tile.Width / 2f, tile.Height / 2f);
+        var radians = (float)(tile.CardRotation * Math.PI / 180.0);
+        return Matrix3x2.CreateScale((float)tile.CardScale, center)
+               * Matrix3x2.CreateRotation(radians, center)
+               * Matrix3x2.CreateTranslation(0, (float)(tile.CardOffsetY * dpiScale));
     }
 
     private void Release(TileTarget tile)
@@ -283,6 +338,10 @@ internal sealed class OverlayTarget : IDisposable
     {
         public TileTarget(
             WindowId window,
+            WindowId front,
+            StackCard card,
+            float baseOffsetX,
+            float baseOffsetY,
             float width,
             float height,
             IDCompositionVisual visual,
@@ -294,6 +353,13 @@ internal sealed class OverlayTarget : IDisposable
             uint borderBgra)
         {
             Window = window;
+            Front = front;
+            CardOffsetY = card.OffsetY;
+            CardScale = card.Scale;
+            CardRotation = card.RotationDegrees;
+            Dim = card.Dim;
+            BaseOffsetX = baseOffsetX;
+            BaseOffsetY = baseOffsetY;
             Width = width;
             Height = height;
             Visual = visual;
@@ -306,6 +372,20 @@ internal sealed class OverlayTarget : IDisposable
         }
 
         public WindowId Window { get; }
+
+        public WindowId Front { get; set; }
+
+        public double CardOffsetY { get; set; }
+
+        public double CardScale { get; set; }
+
+        public double CardRotation { get; set; }
+
+        public float Dim { get; set; }
+
+        public float BaseOffsetX { get; set; }
+
+        public float BaseOffsetY { get; set; }
 
         public float Width { get; }
 

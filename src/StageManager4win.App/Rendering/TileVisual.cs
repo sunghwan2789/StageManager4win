@@ -14,4 +14,7 @@ public sealed record TileVisual(
     string AppName,
     string Title,
     bool HighContrast,
-    uint BorderBgra);
+    uint BorderBgra,
+    int StackIndex = 0,
+    int AppWindowCount = 1,
+    WindowId Group = default);

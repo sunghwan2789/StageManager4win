@@ -20,6 +20,9 @@ internal static class WindowActivation
         }
     }
 
+    public static void Minimize(WindowId window) =>
+        PInvoke.ShowWindow(new HWND((nint)window.Value), SHOW_WINDOW_CMD.SW_MINIMIZE);
+
     public static bool Activate(WindowId window)
     {
         var hwnd = new HWND((nint)window.Value);

@@ -99,10 +99,19 @@ internal sealed class StageCoordinator : IDisposable
         var overlay = new OverlayWindow(monitor);
         var monitorId = monitor.Id;
         overlay.TileClicked += ActivateWindow;
+        overlay.TileDropped += AddWindowToStage;
         overlay.TileInvoked += window => ActivateFromUia(monitorId, window);
         overlay.HoverChanged += window =>
             _render.Post(new RenderCommand.SetOverlayHover(monitorId, window));
         overlay.ScrollRequested += delta => Scroll(monitorId, delta);
+        overlay.DragStarted += () => _autoHide.Suppress(true);
+        overlay.DragMoved += (window, dx, dy) =>
+            _render.Post(new RenderCommand.UpdateDragGhost(monitorId, window, dx, dy));
+        overlay.DragEnded += () =>
+        {
+            _autoHide.Suppress(false);
+            _render.Post(new RenderCommand.UpdateDragGhost(monitorId, null, 0, 0));
+        };
         overlay.DpiChanged += dpi => OnDpiChanged(monitorId, dpi);
         overlay.Show();
         _overlays[monitorId] = overlay;
@@ -622,9 +631,21 @@ internal sealed class StageCoordinator : IDisposable
                 _settings.StripEdge);
             var layout = StripLayoutCalculator.Calculate(items, options);
             overlay.SetStripBounds(layout.StripBounds);
+            var monitorWidth = monitor.Bounds.Width * toDip;
+            var workTop = (monitor.WorkArea.Top - monitor.Bounds.Top) * toDip;
+            var workHeight = monitor.WorkArea.Height * toDip;
+            var edgeX = _settings.StripEdge == StripEdge.Left
+                ? 0
+                : Math.Max(0, monitorWidth - AutoHideController.RevealEdgeDip);
+            var edgeZone = new RectD(edgeX, workTop, AutoHideController.RevealEdgeDip, workHeight);
+            var tileBounds = layout.Tiles.Select(placement => placement.Bounds).ToArray();
             if (layout.Tiles.Count == 0)
             {
-                _stripAreas.Remove(monitor.Id);
+                _stripAreas[monitor.Id] = new StripHitArea(
+                    layout.StripBounds,
+                    edgeZone,
+                    layout.StripBounds,
+                    Array.Empty<RectD>());
             }
             else
             {
@@ -641,15 +662,11 @@ internal sealed class StageCoordinator : IDisposable
                     bottom = Math.Max(bottom, placement.Bounds.Y + placement.Bounds.Height);
                 }
 
-                var monitorWidth = monitor.Bounds.Width * toDip;
-                var workTop = (monitor.WorkArea.Top - monitor.Bounds.Top) * toDip;
-                var workHeight = monitor.WorkArea.Height * toDip;
-                var edgeX = _settings.StripEdge == StripEdge.Left
-                    ? 0
-                    : Math.Max(0, monitorWidth - AutoHideController.RevealEdgeDip);
                 _stripAreas[monitor.Id] = new StripHitArea(
                     new RectD(left, top, right - left, bottom - top),
-                    new RectD(edgeX, workTop, AutoHideController.RevealEdgeDip, workHeight));
+                    edgeZone,
+                    layout.StripBounds,
+                    tileBounds);
             }
 
             var tiles = new List<TileVisual>(layout.Tiles.Count);
@@ -748,6 +765,47 @@ internal sealed class StageCoordinator : IDisposable
 
         var activated = WindowActivation.Activate(window);
         Refresh();
+        if (!activated)
+        {
+            if (previous is not null)
+            {
+                _model.Restore(previous);
+            }
+
+            FileLogger.Default.Write(
+                "activate",
+                $"window={window.Value} app={snapshot.AppId} reason=foreground");
+            StatusMessage?.Invoke("Windows refused to activate the window.");
+            Reconcile();
+        }
+    }
+
+    private void AddWindowToStage(WindowId window)
+    {
+        if (!_model.Windows.TryGetValue(window, out var snapshot))
+        {
+            Reconcile();
+            return;
+        }
+
+        _model.Monitors.TryGetValue(snapshot.MonitorId, out var previous);
+        if (!_model.AddToStage(window))
+        {
+            Reconcile();
+            return;
+        }
+
+        if (_model.Monitors.TryGetValue(snapshot.MonitorId, out var state))
+        {
+            foreach (var id in state.Stage)
+            {
+                WindowActivation.Restore(id);
+            }
+        }
+
+        var activated = WindowActivation.Activate(window);
+        Refresh();
+        ScheduleWorkspaceSave();
         if (!activated)
         {
             if (previous is not null)

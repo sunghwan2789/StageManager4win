@@ -3,7 +3,11 @@ using StageManager4win.Windows;
 
 namespace StageManager4win.Input;
 
-public sealed record StripHitArea(RectD BoundsDip, RectD EdgeZoneDip);
+public sealed record StripHitArea(
+    RectD BoundsDip,
+    RectD EdgeZoneDip,
+    RectD StripBoundsDip,
+    IReadOnlyList<RectD> TilesDip);
 
 internal sealed class AutoHideController : IDisposable
 {
@@ -17,6 +21,7 @@ internal sealed class AutoHideController : IDisposable
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 100 };
     private readonly Dictionary<string, long> _outsideSince = new(StringComparer.Ordinal);
     private IReadOnlyList<MonitorDescriptor> _monitors = Array.Empty<MonitorDescriptor>();
+    private bool _suppressed;
     private bool _disposed;
 
     public AutoHideController(
@@ -37,6 +42,8 @@ internal sealed class AutoHideController : IDisposable
         _monitors = _displays.GetMonitors();
         _outsideSince.Clear();
     }
+
+    public void Suppress(bool suppressed) => _suppressed = suppressed;
 
     public void Dispose()
     {
@@ -70,6 +77,17 @@ internal sealed class AutoHideController : IDisposable
             var scale = 96.0 / monitor.Dpi;
             var x = (position.X - monitor.Bounds.Left) * scale;
             var y = (position.Y - monitor.Bounds.Top) * scale;
+            if (_suppressed)
+            {
+                if (Inside(area.StripBoundsDip, x, y) || Inside(area.EdgeZoneDip, x, y))
+                {
+                    _setVisible(monitor.Id, true);
+                }
+
+                _outsideSince.Remove(monitor.Id);
+                continue;
+            }
+
             if (Inside(area.EdgeZoneDip, x, y))
             {
                 // Only the edge reveals a hidden strip; hovering its old area does not.

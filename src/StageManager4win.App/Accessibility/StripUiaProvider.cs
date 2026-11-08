@@ -14,12 +14,16 @@ public sealed class StripUiaProvider :
     private readonly object _sync = new();
     private readonly IRawElementProviderSimple? _host;
     private readonly Action<WindowId> _invoke;
+    private readonly Action<WindowId> _add;
     private TileUiaProvider[] _tiles = Array.Empty<TileUiaProvider>();
+    private AddToStageUiaProvider[] _adds = Array.Empty<AddToStageUiaProvider>();
+    private IRawElementProviderFragment[] _children = Array.Empty<IRawElementProviderFragment>();
     private UiaRect _bounds;
 
-    public StripUiaProvider(nint hwnd, Action<WindowId> invoke)
+    public StripUiaProvider(nint hwnd, Action<WindowId> invoke, Action<WindowId> add)
     {
         _invoke = invoke;
+        _add = add;
         _host = UiaInterop.UiaHostProviderFromHwnd(hwnd, out var host) >= 0 ? host : null;
     }
 
@@ -28,13 +32,21 @@ public sealed class StripUiaProvider :
         var scale = dpi / 96.0;
         lock (_sync)
         {
-            var existing = new Dictionary<WindowId, TileUiaProvider>(_tiles.Length);
+            var existingTiles = new Dictionary<WindowId, TileUiaProvider>(_tiles.Length);
             foreach (var provider in _tiles)
             {
-                existing[provider.Window] = provider;
+                existingTiles[provider.Window] = provider;
             }
 
-            var next = new TileUiaProvider[tiles.Count];
+            var existingAdds = new Dictionary<WindowId, AddToStageUiaProvider>(_adds.Length);
+            foreach (var provider in _adds)
+            {
+                existingAdds[provider.Window] = provider;
+            }
+
+            var nextTiles = new TileUiaProvider[tiles.Count];
+            var nextAdds = new AddToStageUiaProvider[tiles.Count];
+            var children = new IRawElementProviderFragment[tiles.Count * 2];
             var bounds = new UiaRect();
             for (var index = 0; index < tiles.Count; index++)
             {
@@ -44,28 +56,39 @@ public sealed class StripUiaProvider :
                     originY + tile.BoundsDip.Y * scale,
                     tile.BoundsDip.Width * scale,
                     tile.BoundsDip.Height * scale);
-                if (!existing.TryGetValue(tile.Window, out var provider))
+                if (!existingTiles.TryGetValue(tile.Window, out var tileProvider))
                 {
-                    provider = new TileUiaProvider(this, tile.Window, _invoke);
+                    tileProvider = new TileUiaProvider(this, tile.Window, _invoke);
                 }
 
-                provider.Update(tile, rectangle);
-                next[index] = provider;
+                if (!existingAdds.TryGetValue(tile.Window, out var addProvider))
+                {
+                    addProvider = new AddToStageUiaProvider(this, tile.Window, _add);
+                }
+
+                tileProvider.Update(tile, rectangle);
+                addProvider.Update(tile, rectangle);
+                nextTiles[index] = tileProvider;
+                nextAdds[index] = addProvider;
+                children[index * 2] = tileProvider;
+                children[index * 2 + 1] = addProvider;
                 bounds = Union(bounds, rectangle);
             }
 
-            _tiles = next;
+            _tiles = nextTiles;
+            _adds = nextAdds;
+            _children = children;
             _bounds = bounds;
         }
     }
 
-    public TileUiaProvider? NavigateSibling(TileUiaProvider tile, int delta)
+    public IRawElementProviderFragment? NavigateSibling(IRawElementProviderFragment provider, int delta)
     {
         lock (_sync)
         {
-            var index = Array.IndexOf(_tiles, tile);
+            var index = Array.IndexOf(_children, provider);
             var target = index + delta;
-            return index >= 0 && target >= 0 && target < _tiles.Length ? _tiles[target] : null;
+            return index >= 0 && target >= 0 && target < _children.Length ? _children[target] : null;
         }
     }
 
@@ -102,8 +125,8 @@ public sealed class StripUiaProvider :
         {
             return direction switch
             {
-                NavigateDirection.FirstChild => _tiles.Length > 0 ? _tiles[0] : null,
-                NavigateDirection.LastChild => _tiles.Length > 0 ? _tiles[^1] : null,
+                NavigateDirection.FirstChild => _children.Length > 0 ? _children[0] : null,
+                NavigateDirection.LastChild => _children.Length > 0 ? _children[^1] : null,
                 _ => null
             };
         }

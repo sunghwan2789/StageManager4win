@@ -19,7 +19,7 @@ public sealed class TileUiaProvider :
     {
         _root = root;
         _invoke = invoke;
-        _data = new TileData(window, string.Empty, string.Empty, string.Empty, default);
+        _data = new TileData(window, string.Empty, string.Empty, string.Empty, 1, default);
     }
 
     public WindowId Window => Volatile.Read(ref _data).Window;
@@ -30,6 +30,7 @@ public sealed class TileUiaProvider :
             tile.AppId,
             tile.AppName,
             tile.Title,
+            tile.AppWindowCount,
             bounds));
 
     public UiaProviderOptions ProviderOptions => UiaProviderOptions.ServerSideProvider;
@@ -43,7 +44,9 @@ public sealed class TileUiaProvider :
         return propertyId switch
         {
             UiaInterop.UiaControlTypePropertyId => UiaInterop.UiaButtonControlTypeId,
-            UiaInterop.UiaNamePropertyId => $"{data.AppName} — {data.Title}",
+            UiaInterop.UiaNamePropertyId => data.WindowCount > 1
+                ? $"{data.AppName} — {data.WindowCount} windows"
+                : $"{data.AppName} — {data.Title}",
             UiaInterop.UiaAutomationIdPropertyId => $"{data.AppId}|{data.Title}",
             UiaInterop.UiaIsKeyboardFocusablePropertyId => false,
             UiaInterop.UiaIsEnabledPropertyId => true,
@@ -86,5 +89,6 @@ public sealed class TileUiaProvider :
         string AppId,
         string AppName,
         string Title,
+        int WindowCount,
         UiaRect Bounds);
 }

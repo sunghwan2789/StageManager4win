@@ -304,12 +304,16 @@ internal sealed class OverlayWindow : Form
             return null;
         }
 
-        _uiaRoot ??= new StripUiaProvider(Handle, InvokeTile);
+        _uiaRoot ??= new StripUiaProvider(Handle, InvokeTile, DropTile);
         _uiaRoot.Update(_frontTiles, Left, Top, _dpi);
         return _uiaRoot;
     }
 
-    private void InvokeTile(WindowId window)
+    private void InvokeTile(WindowId window) => Raise(TileInvoked, window);
+
+    private void DropTile(WindowId window) => Raise(TileDropped, window);
+
+    private void Raise(Action<WindowId>? handler, WindowId window)
     {
         if (!IsHandleCreated || IsDisposed)
         {
@@ -318,7 +322,7 @@ internal sealed class OverlayWindow : Form
 
         try
         {
-            BeginInvoke(() => TileInvoked?.Invoke(window));
+            BeginInvoke(() => handler?.Invoke(window));
         }
         catch (InvalidOperationException)
         {

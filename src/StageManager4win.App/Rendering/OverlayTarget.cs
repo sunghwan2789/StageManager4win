@@ -43,6 +43,9 @@ internal sealed class OverlayTarget : IDisposable
         var next = new List<TileTarget>(tiles.Count);
         foreach (var tile in tiles)
         {
+            var borderPixels = tile.HighContrast
+                ? (uint)Math.Max(1, Math.Round(2 * scale))
+                : 0;
             var width = Math.Max(1, (int)Math.Ceiling(tile.BoundsDip.Width * scale));
             var height = Math.Max(1, (int)Math.Ceiling(tile.BoundsDip.Height * scale));
             var existing = _tiles.Find(candidate =>
@@ -55,6 +58,23 @@ internal sealed class OverlayTarget : IDisposable
                 existing.Visual.SetOffsetX((float)(tile.BoundsDip.X * scale));
                 existing.Visual.SetOffsetY((float)(tile.BoundsDip.Y * scale));
                 existing.IsMinimized = tile.IsMinimized;
+                if (existing.BorderPixels != borderPixels || existing.BorderBgra != tile.BorderBgra)
+                {
+                    existing.BorderPixels = borderPixels;
+                    existing.BorderBgra = tile.BorderBgra;
+                    if (tile.Icon is { } existingIcon)
+                    {
+                        TilePainter.Paint(
+                            _device,
+                            existing.Surface,
+                            existingIcon,
+                            (uint)existing.Width,
+                            (uint)existing.Height,
+                            borderPixels,
+                            tile.BorderBgra);
+                    }
+                }
+
                 next.Add(existing);
                 continue;
             }
@@ -68,7 +88,14 @@ internal sealed class OverlayTarget : IDisposable
                 out var surface);
             if (tile.Icon is { } icon)
             {
-                TilePainter.Paint(_device, surface, icon, (uint)width, (uint)height);
+                TilePainter.Paint(
+                    _device,
+                    surface,
+                    icon,
+                    (uint)width,
+                    (uint)height,
+                    borderPixels,
+                    tile.BorderBgra);
             }
 
             visual.SetContent(surface);
@@ -105,7 +132,9 @@ internal sealed class OverlayTarget : IDisposable
                 surface,
                 clip,
                 effect,
-                tile.IsMinimized));
+                tile.IsMinimized,
+                borderPixels,
+                tile.BorderBgra));
         }
 
         foreach (var stale in _tiles)
@@ -161,7 +190,9 @@ internal sealed class OverlayTarget : IDisposable
                         texture,
                         (uint)tile.Width,
                         (uint)tile.Height,
-                        uvScale);
+                        uvScale,
+                        tile.BorderPixels,
+                        tile.BorderBgra);
                 }
                 finally
                 {
@@ -254,7 +285,9 @@ internal sealed class OverlayTarget : IDisposable
             IDCompositionSurface surface,
             IDCompositionRectangleClip clip,
             IDCompositionEffectGroup effect,
-            bool isMinimized)
+            bool isMinimized,
+            uint borderPixels,
+            uint borderBgra)
         {
             Window = window;
             Width = width;
@@ -264,6 +297,8 @@ internal sealed class OverlayTarget : IDisposable
             Clip = clip;
             Effect = effect;
             IsMinimized = isMinimized;
+            BorderPixels = borderPixels;
+            BorderBgra = borderBgra;
         }
 
         public WindowId Window { get; }
@@ -281,6 +316,10 @@ internal sealed class OverlayTarget : IDisposable
         public IDCompositionEffectGroup Effect { get; }
 
         public bool IsMinimized { get; set; }
+
+        public uint BorderPixels { get; set; }
+
+        public uint BorderBgra { get; set; }
 
         public long LastFrame { get; set; }
 

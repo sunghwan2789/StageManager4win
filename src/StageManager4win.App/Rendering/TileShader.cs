@@ -11,6 +11,8 @@ internal static class TileShader
         {
             float4 UvRect;      // xy = icon scale, zw = icon offset
             float4 Background;
+            float4 BorderRect;  // xy = border thickness in UV units
+            float4 BorderColor;
         };
 
         Texture2D TileTexture : register(t0);
@@ -33,6 +35,15 @@ internal static class TileShader
 
         float4 PSMain(VertexOutput input) : SV_Target
         {
+            if (BorderRect.x > 0.0
+                && (input.Uv.x < BorderRect.x
+                    || input.Uv.x > 1.0 - BorderRect.x
+                    || input.Uv.y < BorderRect.y
+                    || input.Uv.y > 1.0 - BorderRect.y))
+            {
+                return BorderColor;
+            }
+
             float2 local = (input.Uv - UvRect.zw) / UvRect.xy;
             if (any(local < 0.0) || any(local > 1.0))
             {

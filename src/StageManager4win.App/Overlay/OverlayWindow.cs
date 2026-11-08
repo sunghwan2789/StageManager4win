@@ -1,3 +1,4 @@
+using StageManager4win.Accessibility;
 using StageManager4win.Core.Layout;
 using StageManager4win.Core.Windows;
 using StageManager4win.Rendering;
@@ -17,11 +18,14 @@ internal sealed class OverlayWindow : Form
     private const int WmMouseWheel = 0x020A;
     private const int WmMouseLeave = 0x02A3;
     private const int WmDpiChanged = 0x02E0;
+    private const int WmGetObject = 0x003D;
     private const nint MaNoActivate = 3;
     // Matches the 1.05 hover scale in OverlayTarget; the region must include the growth.
     private const double HoverGrowth = 0.025;
 
     private readonly List<TilePlacement> _placements = new();
+    private IReadOnlyList<TileVisual> _tiles = Array.Empty<TileVisual>();
+    private StripUiaProvider? _uiaRoot;
     private uint _dpi;
     private bool _visible = true;
     private bool _trackingLeave;
@@ -45,6 +49,8 @@ internal sealed class OverlayWindow : Form
     public MonitorDescriptor Monitor { get; }
 
     public event Action<WindowId>? TileClicked;
+
+    public event Action<WindowId>? TileInvoked;
 
     public event Action<WindowId?>? HoverChanged;
 
@@ -70,8 +76,10 @@ internal sealed class OverlayWindow : Form
 
     public void SetTiles(IReadOnlyList<TileVisual> tiles)
     {
+        _tiles = tiles;
         _placements.Clear();
         _placements.AddRange(tiles.Select(tile => new TilePlacement(tile.Window, tile.BoundsDip)));
+        _uiaRoot?.Update(_tiles, Left, Top, _dpi);
         UpdateRegion();
     }
 
@@ -84,6 +92,7 @@ internal sealed class OverlayWindow : Form
     public void UpdateDpi(uint dpi)
     {
         _dpi = dpi;
+        _uiaRoot?.Update(_tiles, Left, Top, _dpi);
         UpdateRegion();
     }
 
@@ -133,9 +142,67 @@ internal sealed class OverlayWindow : Form
                 UpdateDpi(dpi);
                 DpiChanged?.Invoke(dpi);
                 break;
+            case WmGetObject:
+                // UiaReturnRawElementProvider checks lParam itself; filtering here
+                // would hide the provider from the MSAA hit-test path.
+                if (EnsureUiaRoot() is { } root)
+                {
+                    var result = UiaInterop.UiaReturnRawElementProvider(
+                        Handle,
+                        message.WParam,
+                        message.LParam,
+                        root);
+                    if (result != 0)
+                    {
+                        message.Result = result;
+                        return;
+                    }
+                }
+
+                break;
         }
 
         base.WndProc(ref message);
+    }
+
+    protected override void OnHandleDestroyed(EventArgs e)
+    {
+        if (_uiaRoot is not null)
+        {
+            UiaInterop.UiaReturnRawElementProvider(Handle, 0, 0, null);
+            _uiaRoot = null;
+        }
+
+        base.OnHandleDestroyed(e);
+    }
+
+    private StripUiaProvider? EnsureUiaRoot()
+    {
+        if (!IsHandleCreated)
+        {
+            return null;
+        }
+
+        _uiaRoot ??= new StripUiaProvider(Handle, InvokeTile);
+        _uiaRoot.Update(_tiles, Left, Top, _dpi);
+        return _uiaRoot;
+    }
+
+    private void InvokeTile(WindowId window)
+    {
+        if (!IsHandleCreated || IsDisposed)
+        {
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(() => TileInvoked?.Invoke(window));
+        }
+        catch (InvalidOperationException)
+        {
+            // The overlay is closing.
+        }
     }
 
     private WindowId? HitFromPacked(nint packed)

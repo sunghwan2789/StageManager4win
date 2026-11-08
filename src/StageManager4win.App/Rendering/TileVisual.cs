@@ -9,4 +9,9 @@ public sealed record TileVisual(
     double CornerRadiusDip,
     IconBitmap? Icon,
     bool IsMinimized,
-    nint SourceHwnd);
+    nint SourceHwnd,
+    string AppId,
+    string AppName,
+    string Title,
+    bool HighContrast,
+    uint BorderBgra);

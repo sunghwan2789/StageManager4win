@@ -19,6 +19,8 @@ internal static class TilePainter
         public Vector2 UvScale;
         public Vector2 UvOffset;
         public Vector4 Background;
+        public Vector4 BorderRect;
+        public Vector4 BorderColor;
     }
 
     public static unsafe void Paint(
@@ -26,7 +28,9 @@ internal static class TilePainter
         IDCompositionSurface surface,
         IconBitmap bitmap,
         uint width,
-        uint height)
+        uint height,
+        uint borderPixels,
+        uint borderBgra)
     {
         var expected = checked(bitmap.Width * bitmap.Height * 4);
         if (bitmap.Bgra.Length < expected)
@@ -68,7 +72,9 @@ internal static class TilePainter
             {
                 UvScale = new Vector2(scale),
                 UvOffset = new Vector2((1f - scale) / 2f),
-                Background = new Vector4(0.08f, 0.08f, 0.10f, 1f)
+                Background = new Vector4(0.08f, 0.08f, 0.10f, 1f),
+                BorderRect = BorderInUv(borderPixels, width, height),
+                BorderColor = ToColor(borderBgra)
             };
             Draw(device, surface, view, constants, width, height);
         }
@@ -92,7 +98,9 @@ internal static class TilePainter
         ID3D11Texture2D texture,
         uint width,
         uint height,
-        Vector2 uvScale)
+        Vector2 uvScale,
+        uint borderPixels,
+        uint borderBgra)
     {
         ID3D11ShaderResourceView? view = null;
         try
@@ -102,7 +110,9 @@ internal static class TilePainter
             {
                 UvScale = uvScale,
                 UvOffset = Vector2.Zero,
-                Background = new Vector4(0f, 0f, 0f, 1f)
+                Background = new Vector4(0f, 0f, 0f, 1f),
+                BorderRect = BorderInUv(borderPixels, width, height),
+                BorderColor = ToColor(borderBgra)
             };
             Draw(device, surface, view, constants, width, height);
         }
@@ -114,6 +124,17 @@ internal static class TilePainter
             }
         }
     }
+
+    private static Vector4 BorderInUv(uint borderPixels, uint width, uint height) =>
+        borderPixels > 0 && width > 0 && height > 0
+            ? new Vector4((float)borderPixels / width, (float)borderPixels / height, 0f, 0f)
+            : Vector4.Zero;
+
+    private static Vector4 ToColor(uint bgra) => new(
+        ((bgra >> 16) & 0xFF) / 255f,
+        ((bgra >> 8) & 0xFF) / 255f,
+        (bgra & 0xFF) / 255f,
+        ((bgra >> 24) & 0xFF) / 255f);
 
     private static unsafe void Draw(
         RenderDevice device,

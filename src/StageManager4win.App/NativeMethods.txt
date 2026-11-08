@@ -79,3 +79,9 @@ WindowsCreateString
 WindowsDeleteString
 CreateDirect3D11DeviceFromDXGIDevice
 IInspectable
+UiaReturnRawElementProvider
+UiaHostProviderFromHwnd
+UiaGetReservedNotSupportedValue
+SwitchToThisWindow
+keybd_event
+KEYBD_EVENT_FLAGS

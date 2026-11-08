@@ -98,6 +98,7 @@ internal sealed class StageCoordinator : IDisposable
         var overlay = new OverlayWindow(monitor);
         var monitorId = monitor.Id;
         overlay.TileClicked += ActivateWindow;
+        overlay.TileInvoked += window => ActivateFromUia(monitorId, window);
         overlay.HoverChanged += window =>
             _render.Post(new RenderCommand.SetOverlayHover(monitorId, window));
         overlay.ScrollRequested += delta => Scroll(monitorId, delta);
@@ -560,6 +561,8 @@ internal sealed class StageCoordinator : IDisposable
 
         var states = _model.Monitors;
         var maxItems = Math.Max(1, _settings.MaxVisibleStripItems);
+        var highContrast = SystemInformation.HighContrast;
+        var borderBgra = highContrast ? ToBgra(SystemColors.WindowText) : 0;
         foreach (var monitor in _monitors)
         {
             if (!_overlays.TryGetValue(monitor.Id, out var overlay))
@@ -652,7 +655,12 @@ internal sealed class StageCoordinator : IDisposable
                     TileCornerRadiusDip,
                     GetIcon(snapshot),
                     snapshot.IsMinimized,
-                    (nint)placement.Window.Value));
+                    (nint)placement.Window.Value,
+                    snapshot.AppId,
+                    snapshot.AppName,
+                    snapshot.Title,
+                    highContrast,
+                    borderBgra));
             }
 
             var autoHideVisible = !_settings.AutoHide
@@ -664,6 +672,20 @@ internal sealed class StageCoordinator : IDisposable
             overlay.SetVisible(visible);
             _render.Post(new RenderCommand.UpdateOverlay(monitor.Id, tiles, visible));
         }
+    }
+
+    private void ActivateFromUia(string monitorId, WindowId window)
+    {
+        if (_settings.AutoHide
+            && _settings.Enabled
+            && !Suspended
+            && !_visibleByMonitor.GetValueOrDefault(monitorId, true))
+        {
+            _visibleByMonitor[monitorId] = true;
+            Refresh();
+        }
+
+        ActivateWindow(window);
     }
 
     private void ActivateWindow(WindowId window)
@@ -740,6 +762,9 @@ internal sealed class StageCoordinator : IDisposable
 
         return _monitors.Count > 0 ? _monitors[0].Id : null;
     }
+
+    private static uint ToBgra(Color color) =>
+        (uint)(color.B | (color.G << 8) | (color.R << 16) | (color.A << 24));
 
     private IconBitmap GetIcon(WindowSnapshot snapshot)
     {

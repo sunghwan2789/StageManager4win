@@ -71,7 +71,7 @@ internal sealed class RenderDevice : IDisposable
 
         var buffer = new D3D11_BUFFER_DESC
         {
-            ByteWidth = 32,
+            ByteWidth = 64,
             Usage = D3D11_USAGE.D3D11_USAGE_DYNAMIC,
             BindFlags = D3D11_BIND_FLAG.D3D11_BIND_CONSTANT_BUFFER,
             CPUAccessFlags = D3D11_CPU_ACCESS_FLAG.D3D11_CPU_ACCESS_WRITE

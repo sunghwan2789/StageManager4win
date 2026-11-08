@@ -16,7 +16,9 @@ internal sealed class OverlayWindow : Form
     private const int WmMouseActivate = 0x0021;
     private const int WmMouseMove = 0x0200;
     private const int WmLeftButtonDown = 0x0201;
+    private const int WmLeftButtonUp = 0x0202;
     private const int WmMouseWheel = 0x020A;
+    private const int WmCaptureChanged = 0x0215;
     private const int WmMouseLeave = 0x02A3;
     private const int WmDpiChanged = 0x02E0;
     private const int WmGetObject = 0x003D;
@@ -25,12 +27,18 @@ internal sealed class OverlayWindow : Form
     private const double HoverGrowth = 0.025;
 
     private readonly List<TilePlacement> _placements = new();
-    private IReadOnlyList<TileVisual> _tiles = Array.Empty<TileVisual>();
+    private IReadOnlyList<TileVisual> _frontTiles = Array.Empty<TileVisual>();
     private StripUiaProvider? _uiaRoot;
     private uint _dpi;
     private bool _visible = true;
     private bool _trackingLeave;
     private WindowId? _hover;
+    private RectD _stripBounds;
+    private WindowId? _dragWindow;
+    private PointF _dragStart;
+    private bool _dragShift;
+    private bool _dragging;
+    private RectD? _ghost;
 
     public OverlayWindow(MonitorDescriptor monitor)
     {
@@ -51,11 +59,19 @@ internal sealed class OverlayWindow : Form
 
     public event Action<WindowId>? TileClicked;
 
+    public event Action<WindowId>? TileDropped;
+
     public event Action<WindowId>? TileInvoked;
 
     public event Action<WindowId?>? HoverChanged;
 
     public event Action<int>? ScrollRequested;
+
+    public event Action? DragStarted;
+
+    public event Action<WindowId, double, double>? DragMoved;
+
+    public event Action? DragEnded;
 
     public new event Action<uint>? DpiChanged;
 
@@ -77,12 +93,15 @@ internal sealed class OverlayWindow : Form
 
     public void SetTiles(IReadOnlyList<TileVisual> tiles)
     {
-        _tiles = tiles;
+        _frontTiles = tiles.Where(tile => tile.StackIndex == 0).ToArray();
         _placements.Clear();
-        _placements.AddRange(tiles.Select(tile => new TilePlacement(tile.Window, tile.BoundsDip)));
-        _uiaRoot?.Update(_tiles, Left, Top, _dpi);
+        _placements.AddRange(
+            _frontTiles.Select(tile => new TilePlacement(tile.Window, TileStack.HitBounds(tile.BoundsDip))));
+        _uiaRoot?.Update(_frontTiles, Left, Top, _dpi);
         UpdateRegion();
     }
+
+    public void SetStripBounds(RectD boundsDip) => _stripBounds = boundsDip;
 
     public void SetVisible(bool visible)
     {
@@ -93,7 +112,7 @@ internal sealed class OverlayWindow : Form
     public void UpdateDpi(uint dpi)
     {
         _dpi = dpi;
-        _uiaRoot?.Update(_tiles, Left, Top, _dpi);
+        _uiaRoot?.Update(_frontTiles, Left, Top, _dpi);
         UpdateRegion();
     }
 
@@ -121,16 +140,96 @@ internal sealed class OverlayWindow : Form
                     message.Result = MaNoActivate;
                     return;
                 case WmLeftButtonDown:
-                    var clicked = HitFromPacked(message.LParam);
-                    if (clicked is { } window)
+                    var pressedPoint = PointFromPacked(message.LParam);
+                    if (TileHitTest.Hit(_placements, pressedPoint.X, pressedPoint.Y) is not { } pressed)
                     {
-                        TileClicked?.Invoke(window);
+                        return;
                     }
 
+                    _dragWindow = pressed;
+                    _dragStart = pressedPoint;
+                    _dragShift = (Control.ModifierKeys & Keys.Shift) != 0;
+                    _dragging = false;
+                    Capture = true;
                     return;
                 case WmMouseMove:
                     TrackLeave();
+                    if (_dragWindow is { } drag && Capture)
+                    {
+                        var movePoint = PointFromPacked(message.LParam);
+                        var dx = movePoint.X - _dragStart.X;
+                        var dy = movePoint.Y - _dragStart.Y;
+                        if (!_dragging && !DragGesture.IsClick(dx, dy))
+                        {
+                            _dragging = true;
+                            DragStarted?.Invoke();
+                        }
+
+                        if (_dragging)
+                        {
+                            DragMoved?.Invoke(drag, dx, dy);
+                            var front = _frontTiles.FirstOrDefault(tile => tile.Window == drag);
+                            _ghost = front is null
+                                ? null
+                                : new RectD(
+                                    front.BoundsDip.X + dx,
+                                    front.BoundsDip.Y + dy,
+                                    front.BoundsDip.Width,
+                                    front.BoundsDip.Height);
+                            UpdateRegion();
+                            return;
+                        }
+                    }
+
                     SetHover(HitFromPacked(message.LParam));
+                    break;
+                case WmLeftButtonUp:
+                    var upPoint = PointFromPacked(message.LParam);
+                    var released = _dragWindow;
+                    var wasDragging = _dragging;
+                    var shift = _dragShift;
+                    _dragWindow = null;
+                    _dragging = false;
+                    _dragShift = false;
+                    _ghost = null;
+                    Capture = false;
+                    UpdateRegion();
+                    if (released is { } window)
+                    {
+                        if (!wasDragging && HitFromPacked(message.LParam) == window)
+                        {
+                            if (shift)
+                            {
+                                TileDropped?.Invoke(window);
+                            }
+                            else
+                            {
+                                TileClicked?.Invoke(window);
+                            }
+                        }
+                        else if (wasDragging && DragGesture.Outside(_stripBounds, upPoint.X, upPoint.Y))
+                        {
+                            TileDropped?.Invoke(window);
+                        }
+                    }
+
+                    if (wasDragging)
+                    {
+                        DragEnded?.Invoke();
+                    }
+
+                    return;
+                case WmCaptureChanged:
+                    if (_dragWindow is not null || _dragging)
+                    {
+                        _dragWindow = null;
+                        _dragging = false;
+                        _dragShift = false;
+                        _ghost = null;
+                        UpdateRegion();
+                        DragEnded?.Invoke();
+                    }
+
                     break;
                 case WmMouseLeave:
                     _trackingLeave = false;
@@ -206,7 +305,7 @@ internal sealed class OverlayWindow : Form
         }
 
         _uiaRoot ??= new StripUiaProvider(Handle, InvokeTile);
-        _uiaRoot.Update(_tiles, Left, Top, _dpi);
+        _uiaRoot.Update(_frontTiles, Left, Top, _dpi);
         return _uiaRoot;
     }
 
@@ -229,10 +328,16 @@ internal sealed class OverlayWindow : Form
 
     private WindowId? HitFromPacked(nint packed)
     {
+        var point = PointFromPacked(packed);
+        return TileHitTest.Hit(_placements, point.X, point.Y);
+    }
+
+    private PointF PointFromPacked(nint packed)
+    {
         var value = packed.ToInt64();
         var x = (short)(value & 0xFFFF);
         var y = (short)((value >> 16) & 0xFFFF);
-        return TileHitTest.Hit(_placements, x * 96.0 / _dpi, y * 96.0 / _dpi);
+        return new PointF((float)(x * 96.0 / _dpi), (float)(y * 96.0 / _dpi));
     }
 
     private void SetHover(WindowId? window)
@@ -277,21 +382,12 @@ internal sealed class OverlayWindow : Form
         {
             foreach (var placement in _placements)
             {
-                var bounds = placement.Bounds;
-                var left = (int)Math.Round(bounds.X * _dpi / 96.0);
-                var top = (int)Math.Round(bounds.Y * _dpi / 96.0);
-                var right = (int)Math.Round((bounds.X + bounds.Width) * _dpi / 96.0);
-                var bottom = (int)Math.Round((bounds.Y + bounds.Height) * _dpi / 96.0);
-                var scale = _dpi / 96.0;
-                var padX = (int)Math.Ceiling(bounds.Width * scale * HoverGrowth) + 1;
-                var padY = (int)Math.Ceiling(bounds.Height * scale * HoverGrowth) + 1;
-                var rectangle = PInvoke.CreateRectRgn(
-                    left - padX,
-                    top - padY,
-                    right + padX,
-                    bottom + padY);
-                PInvoke.CombineRgn(region, region, rectangle, RGN_COMBINE_MODE.RGN_OR);
-                PInvoke.DeleteObject(new HGDIOBJ(rectangle.Value));
+                AddRect(region, TileStack.HitBounds(placement.Bounds));
+            }
+
+            if (_ghost is { } ghost)
+            {
+                AddRect(region, ghost);
             }
         }
 
@@ -300,5 +396,19 @@ internal sealed class OverlayWindow : Form
         {
             PInvoke.DeleteObject(new HGDIOBJ(region.Value));
         }
+    }
+
+    private unsafe void AddRect(HRGN region, RectD bounds)
+    {
+        var scale = _dpi / 96.0;
+        var padX = (int)Math.Ceiling(bounds.Width * scale * HoverGrowth) + 1;
+        var padY = (int)Math.Ceiling(bounds.Height * scale * HoverGrowth) + 1;
+        var rectangle = PInvoke.CreateRectRgn(
+            (int)Math.Round(bounds.X * scale) - padX,
+            (int)Math.Round(bounds.Y * scale) - padY,
+            (int)Math.Round((bounds.X + bounds.Width) * scale) + padX,
+            (int)Math.Round((bounds.Y + bounds.Height) * scale) + padY);
+        PInvoke.CombineRgn(region, region, rectangle, RGN_COMBINE_MODE.RGN_OR);
+        PInvoke.DeleteObject(new HGDIOBJ(rectangle.Value));
     }
 }

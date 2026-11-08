@@ -112,4 +112,28 @@ public class StripLayoutTests
         // 800 * 0.12 = 96, clamped to 160; tile 120 wide -> x = 20.
         Assert.Equal(20, layout.Tiles[0].Bounds.X, 3);
     }
+
+    [Fact]
+    public void Calculate_LeftEdge_StripBoundsIsTheColumn()
+    {
+        var options = new StripLayoutOptions(1920, 1080, 0, 1040, StripEdge.Left);
+        var layout = StripLayoutCalculator.Calculate(
+            new[] { new StripItem(new WindowId(1), 16.0 / 9.0) }, options);
+
+        Assert.Equal(0, layout.StripBounds.X);
+        Assert.Equal(0, layout.StripBounds.Y);
+        Assert.Equal(230.4, layout.StripBounds.Width, 3);
+        Assert.Equal(1040, layout.StripBounds.Height);
+    }
+
+    [Fact]
+    public void Calculate_RightEdge_StripBoundsIsTheColumn()
+    {
+        var options = new StripLayoutOptions(1920, 1080, 0, 1040, StripEdge.Right);
+        var layout = StripLayoutCalculator.Calculate(
+            new[] { new StripItem(new WindowId(1), 16.0 / 9.0) }, options);
+
+        Assert.Equal(1689.6, layout.StripBounds.X, 3);
+        Assert.Equal(230.4, layout.StripBounds.Width, 3);
+    }
 }

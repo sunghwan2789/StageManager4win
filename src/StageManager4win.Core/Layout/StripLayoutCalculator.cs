@@ -13,6 +13,11 @@ public static class StripLayoutCalculator
             options.MonitorWidth * options.StripWidthRatio,
             options.MinStripWidth,
             options.MaxStripWidth);
+        var stripBounds = new RectD(
+            options.Edge == StripEdge.Left ? 0 : options.MonitorWidth - stripWidth,
+            options.WorkAreaTop,
+            stripWidth,
+            options.WorkAreaHeight);
 
         var start = Math.Clamp(firstVisibleIndex, 0, items.Count);
         var visible = new List<(WindowId Window, double Width, double Height)>();
@@ -51,7 +56,7 @@ public static class StripLayoutCalculator
             y += height + options.Gap;
         }
 
-        return new StripLayout(tiles, start, tiles.Count);
+        return new StripLayout(tiles, stripBounds, start, tiles.Count);
     }
 
     private static double NormalizeAspect(double aspect)

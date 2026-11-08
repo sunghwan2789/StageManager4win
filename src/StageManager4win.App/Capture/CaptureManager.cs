@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using StageManager4win.Core.Capture;
+using StageManager4win.Core.Diagnostics;
 using StageManager4win.Core.Windows;
 using StageManager4win.Rendering;
 using Windows.Graphics;
@@ -156,6 +157,9 @@ internal sealed class CaptureManager : IDisposable
             catch (Exception exception) when (!DeviceLoss.IsDeviceLost(exception))
             {
                 Debug.WriteLine(exception);
+                FileLogger.Default.Write(
+                    "capture",
+                    $"create window={window.Value} hr=0x{exception.HResult:X8} {exception.GetType().Name}");
                 _failed.Add(window);
                 Failed?.Invoke(window);
             }

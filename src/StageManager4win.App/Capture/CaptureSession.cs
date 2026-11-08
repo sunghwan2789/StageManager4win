@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using StageManager4win.Core.Diagnostics;
 using StageManager4win.Interop;
 using Windows.Graphics;
 using Windows.Graphics.Capture;
@@ -139,6 +140,9 @@ internal sealed class CaptureSession : IDisposable
         catch (Exception exception)
         {
             Debug.WriteLine(exception);
+            FileLogger.Default.Write(
+                "capture",
+                $"dispose hr=0x{exception.HResult:X8} {exception.GetType().Name}");
         }
 
         _pool.Dispose();
@@ -155,6 +159,9 @@ internal sealed class CaptureSession : IDisposable
         catch (Exception exception)
         {
             Debug.WriteLine(exception);
+            FileLogger.Default.Write(
+                "capture",
+                $"frame hr=0x{exception.HResult:X8} {exception.GetType().Name}");
             return;
         }
 

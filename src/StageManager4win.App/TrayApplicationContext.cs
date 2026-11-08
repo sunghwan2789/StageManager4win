@@ -13,6 +13,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _enabledItem;
     private AppSettings _settings;
     private bool _syncingEnabled;
+    private bool _errorShown;
 
     public TrayApplicationContext(SettingsStore store)
     {
@@ -63,6 +64,17 @@ public sealed class TrayApplicationContext : ApplicationContext
     }
 
     public event Action? EnabledChanged;
+
+    public void NotifyErrorOnce(string message)
+    {
+        if (_errorShown)
+        {
+            return;
+        }
+
+        _errorShown = true;
+        _tray.ShowBalloonTip(4000, "StageManager4win", message, ToolTipIcon.Error);
+    }
 
     private void ExitApplication()
     {

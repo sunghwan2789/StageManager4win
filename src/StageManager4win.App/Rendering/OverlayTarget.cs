@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using StageManager4win.Capture;
+using StageManager4win.Core.Diagnostics;
 using StageManager4win.Core.Windows;
 using StageManager4win.Interop;
 using Windows.Graphics;
@@ -217,6 +218,9 @@ internal sealed class OverlayTarget : IDisposable
             catch (Exception exception) when (!DeviceLoss.IsDeviceLost(exception))
             {
                 Debug.WriteLine(exception);
+                FileLogger.Default.Write(
+                    "preview",
+                    $"window={tile.Window.Value} hr=0x{exception.HResult:X8} {exception.GetType().Name}");
                 capture.ReportFailure(tile.Window);
             }
             finally

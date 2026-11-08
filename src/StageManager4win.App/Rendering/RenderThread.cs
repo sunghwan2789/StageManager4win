@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using StageManager4win.Capture;
+using StageManager4win.Core.Diagnostics;
 using StageManager4win.Interop;
 
 namespace StageManager4win.Rendering;
@@ -84,6 +85,9 @@ internal sealed class RenderThread : IDisposable
         catch (Exception exception)
         {
             Debug.WriteLine(exception);
+            FileLogger.Default.Write(
+                "render",
+                $"device create hr=0x{exception.HResult:X8} {exception.GetType().Name}");
             if (DeviceLoss.IsDeviceLost(exception))
             {
                 RaiseDeviceLost();
@@ -104,6 +108,9 @@ internal sealed class RenderThread : IDisposable
         catch (Exception exception)
         {
             Debug.WriteLine(exception);
+            FileLogger.Default.Write(
+                "render",
+                $"capture manager hr=0x{exception.HResult:X8} {exception.GetType().Name}");
             if (DeviceLoss.IsDeviceLost(exception))
             {
                 ReleaseResources();
@@ -180,6 +187,9 @@ internal sealed class RenderThread : IDisposable
         catch (Exception exception) when (DeviceLoss.IsDeviceLost(exception))
         {
             Debug.WriteLine(exception);
+            FileLogger.Default.Write(
+                "render",
+                $"device lost hr=0x{exception.HResult:X8} {exception.GetType().Name}");
             ReleaseResources();
             RaiseDeviceLost();
         }

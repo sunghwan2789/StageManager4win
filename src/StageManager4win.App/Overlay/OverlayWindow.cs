@@ -1,4 +1,5 @@
 using StageManager4win.Accessibility;
+using StageManager4win.Core.Diagnostics;
 using StageManager4win.Core.Layout;
 using StageManager4win.Core.Windows;
 using StageManager4win.Rendering;
@@ -112,57 +113,66 @@ internal sealed class OverlayWindow : Form
 
     protected override void WndProc(ref Message message)
     {
-        switch (message.Msg)
+        try
         {
-            case WmMouseActivate:
-                message.Result = MaNoActivate;
-                return;
-            case WmLeftButtonDown:
-                var clicked = HitFromPacked(message.LParam);
-                if (clicked is { } window)
-                {
-                    TileClicked?.Invoke(window);
-                }
-
-                return;
-            case WmMouseMove:
-                TrackLeave();
-                SetHover(HitFromPacked(message.LParam));
-                break;
-            case WmMouseLeave:
-                _trackingLeave = false;
-                SetHover(null);
-                break;
-            case WmMouseWheel:
-                var delta = (short)((message.WParam.ToInt64() >> 16) & 0xFFFF);
-                ScrollRequested?.Invoke(delta);
-                break;
-            case WmDpiChanged:
-                var dpi = (uint)(message.WParam.ToInt64() & 0xFFFF);
-                UpdateDpi(dpi);
-                DpiChanged?.Invoke(dpi);
-                break;
-            case WmGetObject:
-                // UiaReturnRawElementProvider checks lParam itself; filtering here
-                // would hide the provider from the MSAA hit-test path.
-                if (EnsureUiaRoot() is { } root)
-                {
-                    var result = UiaInterop.UiaReturnRawElementProvider(
-                        Handle,
-                        message.WParam,
-                        message.LParam,
-                        root);
-                    if (result != 0)
+            switch (message.Msg)
+            {
+                case WmMouseActivate:
+                    message.Result = MaNoActivate;
+                    return;
+                case WmLeftButtonDown:
+                    var clicked = HitFromPacked(message.LParam);
+                    if (clicked is { } window)
                     {
-                        message.Result = result;
-                        return;
+                        TileClicked?.Invoke(window);
                     }
-                }
 
-                break;
+                    return;
+                case WmMouseMove:
+                    TrackLeave();
+                    SetHover(HitFromPacked(message.LParam));
+                    break;
+                case WmMouseLeave:
+                    _trackingLeave = false;
+                    SetHover(null);
+                    break;
+                case WmMouseWheel:
+                    var delta = (short)((message.WParam.ToInt64() >> 16) & 0xFFFF);
+                    ScrollRequested?.Invoke(delta);
+                    break;
+                case WmDpiChanged:
+                    var dpi = (uint)(message.WParam.ToInt64() & 0xFFFF);
+                    UpdateDpi(dpi);
+                    DpiChanged?.Invoke(dpi);
+                    break;
+                case WmGetObject:
+                    // UiaReturnRawElementProvider checks lParam itself; filtering here
+                    // would hide the provider from the MSAA hit-test path.
+                    if (EnsureUiaRoot() is { } root)
+                    {
+                        var result = UiaInterop.UiaReturnRawElementProvider(
+                            Handle,
+                            message.WParam,
+                            message.LParam,
+                            root);
+                        if (result != 0)
+                        {
+                            message.Result = result;
+                            return;
+                        }
+                    }
+
+                    break;
+            }
+
+            base.WndProc(ref message);
         }
-
-        base.WndProc(ref message);
+        catch (Exception exception)
+        {
+            FileLogger.Default.Write(
+                "overlay",
+                $"msg=0x{message.Msg:X4} hr=0x{exception.HResult:X8} {exception.GetType().Name}");
+        }
     }
 
     protected override void OnHandleDestroyed(EventArgs e)

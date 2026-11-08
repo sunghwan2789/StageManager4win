@@ -1,3 +1,4 @@
+using StageManager4win.Core.Diagnostics;
 using StageManager4win.Core.Settings;
 using StageManager4win.Windows;
 
@@ -25,15 +26,50 @@ internal static class Program
             return;
         }
 
+        using var mutex = new Mutex(true, @"Local\StageManager4win", out var createdNew);
+        if (!createdNew)
+        {
+            FileLogger.Default.Write("app", "already running");
+            MessageBox.Show(
+                "StageManager4win is already running.",
+                "StageManager4win",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
 
         var directory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "StageManager4win");
         Directory.CreateDirectory(directory);
 
-        Application.Run(new TrayApplicationContext(new SettingsStore(directory)));
+        TrayApplicationContext? context = null;
+        Application.ThreadException += (_, eventArgs) =>
+        {
+            FileLogger.Default.Write("error", eventArgs.Exception.ToString());
+            context?.NotifyErrorOnce(eventArgs.Exception.Message);
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
+            FileLogger.Default.Write(
+                "fatal",
+                eventArgs.ExceptionObject is Exception exception
+                    ? exception.ToString()
+                    : eventArgs.ExceptionObject.GetType().FullName ?? "unknown");
+
+        FileLogger.Default.Write("app", "started");
+        try
+        {
+            context = new TrayApplicationContext(new SettingsStore(directory));
+            Application.Run(context);
+        }
+        finally
+        {
+            FileLogger.Default.Write("app", "stopped");
+        }
     }
 
     private static void DumpWindows()

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
+using StageManager4win.Core.Diagnostics;
 using StageManager4win.Core.Layout;
 using StageManager4win.Core.Settings;
 using StageManager4win.Core.Stages;
@@ -191,6 +192,9 @@ internal sealed class StageCoordinator : IDisposable
         }
         catch (Exception exception)
         {
+            FileLogger.Default.Write(
+                "desktop",
+                $"toggle hr=0x{exception.HResult:X8} {exception.GetType().Name}");
             StatusMessage?.Invoke($"Could not show the desktop: {exception.Message}");
         }
         finally
@@ -367,6 +371,9 @@ internal sealed class StageCoordinator : IDisposable
         catch (Exception exception)
         {
             Debug.WriteLine(exception);
+            FileLogger.Default.Write(
+                "workspace",
+                $"save hr=0x{exception.HResult:X8} {exception.GetType().Name}");
         }
     }
 
@@ -692,6 +699,9 @@ internal sealed class StageCoordinator : IDisposable
     {
         if (!_model.Windows.TryGetValue(window, out var snapshot) || !_model.Activate(window))
         {
+            FileLogger.Default.Write(
+                "activate",
+                $"window={window.Value} app={snapshot?.AppId ?? "?"} reason=model");
             Reconcile();
             StatusMessage?.Invoke("Windows refused to activate the window.");
             return;
@@ -710,6 +720,9 @@ internal sealed class StageCoordinator : IDisposable
         Refresh();
         if (!activated)
         {
+            FileLogger.Default.Write(
+                "activate",
+                $"window={window.Value} app={snapshot.AppId} reason=foreground");
             StatusMessage?.Invoke("Windows refused to activate the window.");
             Reconcile();
         }

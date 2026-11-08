@@ -288,4 +288,129 @@ public class StageModelTests
         AssertOrder(new[] { new WindowId(3), new WindowId(2) }, model.Monitors["M1"].Strip);
         AssertOrder(new[] { new WindowId(1) }, model.Monitors["M1"].Stage);
     }
+
+    [Fact]
+    public void SetForeground_AppAlreadyOnStage_KeepsOtherApps()
+    {
+        var model = new StageModel();
+        model.Reset(new[] { W(1, "A"), W(2, "A"), W(3, "B") }, new WindowId(1));
+        model.AddToStage(new WindowId(3));
+
+        Assert.True(model.SetForeground(new WindowId(2)));
+
+        var m = model.Monitors["M1"];
+        AssertOrder(new[] { new WindowId(2), new WindowId(3) }, m.Stage);
+        AssertOrder(new[] { new WindowId(1) }, m.Strip);
+        Assert.Equal(new WindowId(2), m.Foreground);
+    }
+
+    [Fact]
+    public void SetForeground_OutsideApp_ReplacesStage()
+    {
+        var model = new StageModel();
+        model.Reset(new[] { W(1, "A"), W(2, "B"), W(3, "C") }, new WindowId(1));
+        model.AddToStage(new WindowId(2));
+
+        Assert.True(model.SetForeground(new WindowId(3)));
+
+        var m = model.Monitors["M1"];
+        AssertOrder(new[] { new WindowId(3) }, m.Stage);
+        AssertOrder(new[] { new WindowId(2), new WindowId(1) }, m.Strip);
+    }
+
+    [Fact]
+    public void AddToStage_SecondApp_KeepsFirst()
+    {
+        var model = new StageModel();
+        model.Reset(new[] { W(1, "A"), W(2, "B") }, new WindowId(1));
+
+        Assert.True(model.AddToStage(new WindowId(2)));
+
+        var m = model.Monitors["M1"];
+        AssertOrder(new[] { new WindowId(2), new WindowId(1) }, m.Stage);
+        Assert.Empty(m.Strip);
+        Assert.Equal(new WindowId(2), m.Foreground);
+    }
+
+    [Fact]
+    public void AddToStage_AllAtOnce_AddsSiblingsButLeavesMinimized()
+    {
+        var model = new StageModel(WindowMode.AllAtOnce);
+        model.Reset(new[] { W(1, "A"), W(2, "B"), W(3, "B"), W(4, "B", minimized: true) }, new WindowId(1));
+
+        Assert.True(model.AddToStage(new WindowId(2)));
+
+        var m = model.Monitors["M1"];
+        AssertOrder(new[] { new WindowId(2), new WindowId(3), new WindowId(1) }, m.Stage);
+        AssertOrder(new[] { new WindowId(4) }, m.Strip);
+    }
+
+    [Fact]
+    public void AddToStage_MinimizedRepresentative_IsStaged()
+    {
+        var model = new StageModel();
+        model.Reset(new[] { W(1, "A"), W(2, "B", minimized: true) }, new WindowId(1));
+
+        Assert.True(model.AddToStage(new WindowId(2)));
+
+        Assert.Contains(new WindowId(2), model.Monitors["M1"].Stage);
+    }
+
+    [Fact]
+    public void AddToStage_AppAlreadyOnStage_SwapsWithoutDuplicates()
+    {
+        var model = new StageModel();
+        model.Reset(new[] { W(1, "A"), W(2, "A") }, new WindowId(1));
+
+        Assert.True(model.AddToStage(new WindowId(2)));
+
+        var m = model.Monitors["M1"];
+        AssertOrder(new[] { new WindowId(2) }, m.Stage);
+        AssertOrder(new[] { new WindowId(1) }, m.Strip);
+    }
+
+    [Fact]
+    public void RemoveFromStage_HeadsStrip_AndKeepsOtherApps()
+    {
+        var model = new StageModel();
+        model.Reset(new[] { W(1, "A"), W(2, "B") }, new WindowId(1));
+        model.AddToStage(new WindowId(2));
+
+        Assert.True(model.RemoveFromStage(new WindowId(2)));
+
+        var m = model.Monitors["M1"];
+        AssertOrder(new[] { new WindowId(1) }, m.Stage);
+        AssertOrder(new[] { new WindowId(2) }, m.Strip);
+        Assert.Null(m.Foreground);
+    }
+
+    [Fact]
+    public void Add_AllAtOnce_JoinsStageWhenAnyWindowOfAppIsStaged()
+    {
+        var model = new StageModel(WindowMode.AllAtOnce);
+        model.Reset(new[] { W(1, "A"), W(2, "B") }, new WindowId(1));
+        model.AddToStage(new WindowId(2));
+
+        model.Add(W(3, "B"));
+
+        Assert.Contains(new WindowId(3), model.Monitors["M1"].Stage);
+    }
+
+    [Fact]
+    public void SetMode_ExpandsAndCollapsesEveryStageApp()
+    {
+        var model = new StageModel();
+        model.Reset(new[] { W(1, "A"), W(2, "A"), W(3, "B"), W(4, "B") }, new WindowId(1));
+        model.AddToStage(new WindowId(3));
+
+        model.SetMode(WindowMode.AllAtOnce);
+        AssertOrder(
+            new[] { new WindowId(3), new WindowId(4), new WindowId(1), new WindowId(2) },
+            model.Monitors["M1"].Stage);
+
+        model.SetMode(WindowMode.OneAtATime);
+        AssertOrder(
+            new[] { new WindowId(3), new WindowId(1) },
+            model.Monitors["M1"].Stage);
+    }
 }

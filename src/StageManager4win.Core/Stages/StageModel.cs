@@ -62,7 +62,69 @@ public sealed class StageModel
             return true;
         }
 
-        ApplyForeground(monitor, window);
+        if (monitor.Stage.Any(id => _windows[id].AppId == snapshot.AppId))
+        {
+            ReplaceApp(monitor, window);
+        }
+        else
+        {
+            ApplyForeground(monitor, window);
+        }
+
+        return true;
+    }
+
+    public bool AddToStage(WindowId window)
+    {
+        if (!_windows.TryGetValue(window, out var snapshot))
+        {
+            return false;
+        }
+
+        var monitor = _monitors[snapshot.MonitorId];
+        if (monitor.Stage.Any(id => _windows[id].AppId == snapshot.AppId))
+        {
+            ReplaceApp(monitor, window);
+            return true;
+        }
+
+        var contribution = Contribution(window);
+        monitor.Stage.InsertRange(0, contribution);
+        foreach (var id in contribution)
+        {
+            monitor.Strip.Remove(id);
+        }
+
+        monitor.Foreground = window;
+        monitor.ActiveAppId = snapshot.AppId;
+        return true;
+    }
+
+    public bool RemoveFromStage(WindowId window)
+    {
+        if (!_windows.TryGetValue(window, out var snapshot))
+        {
+            return false;
+        }
+
+        var monitor = _monitors[snapshot.MonitorId];
+        if (!monitor.Stage.Remove(window))
+        {
+            return false;
+        }
+
+        monitor.Strip.Insert(0, window);
+
+        if (monitor.Foreground == window)
+        {
+            monitor.Foreground = null;
+        }
+
+        if (!monitor.Stage.Any(id => _windows[id].AppId == snapshot.AppId))
+        {
+            monitor.ActiveAppId = null;
+        }
+
         return true;
     }
 
@@ -90,9 +152,54 @@ public sealed class StageModel
 
         foreach (var monitor in _monitors.Values)
         {
-            if (monitor.Foreground is { } foreground)
+            if (monitor.Stage.Count == 0)
             {
-                ApplyForeground(monitor, foreground);
+                continue;
+            }
+
+            var ordered = monitor.Stage.Concat(monitor.Strip).Distinct().ToList();
+            var stagedApps = monitor.Stage.Select(id => _windows[id].AppId).Distinct().ToList();
+            var stage = new List<WindowId>();
+
+            foreach (var appId in stagedApps)
+            {
+                if (_mode == WindowMode.AllAtOnce)
+                {
+                    foreach (var id in ordered)
+                    {
+                        var candidate = _windows[id];
+                        if (candidate.AppId == appId && candidate.IsVisible && !candidate.IsMinimized)
+                        {
+                            stage.Add(id);
+                        }
+                    }
+
+                    if (!stage.Any(id => _windows[id].AppId == appId))
+                    {
+                        stage.Add(monitor.Stage.First(id => _windows[id].AppId == appId));
+                    }
+                }
+                else
+                {
+                    var keep = monitor.Foreground is { } foreground
+                               && _windows[foreground].AppId == appId
+                        ? foreground
+                        : monitor.Stage.First(id => _windows[id].AppId == appId);
+                    stage.Add(keep);
+                }
+            }
+
+            var stageSet = stage.ToHashSet();
+            monitor.Stage.Clear();
+            monitor.Stage.AddRange(stage);
+            monitor.Strip.Clear();
+
+            foreach (var id in ordered)
+            {
+                if (!stageSet.Contains(id))
+                {
+                    monitor.Strip.Add(id);
+                }
             }
         }
     }
@@ -114,7 +221,7 @@ public sealed class StageModel
         }
 
         if (_mode == WindowMode.AllAtOnce
-            && monitor.ActiveAppId == window.AppId
+            && monitor.Stage.Any(id => _windows[id].AppId == window.AppId)
             && window.IsVisible
             && !window.IsMinimized)
         {
@@ -260,53 +367,78 @@ public sealed class StageModel
     private void ApplyForeground(MonitorData monitor, WindowId foreground)
     {
         var snapshot = _windows[foreground];
-        var ordered = monitor.Stage.Concat(monitor.Strip).Distinct().ToArray();
-
-        var stage = new List<WindowId> { foreground };
-
-        if (_mode == WindowMode.AllAtOnce)
-        {
-            foreach (var id in ordered)
-            {
-                if (id == foreground)
-                {
-                    continue;
-                }
-
-                var candidate = _windows[id];
-                if (candidate.AppId == snapshot.AppId
-                    && candidate.IsVisible
-                    && !candidate.IsMinimized)
-                {
-                    stage.Add(id);
-                }
-            }
-        }
-
+        var ordered = monitor.Stage.Concat(monitor.Strip).Distinct().ToList();
+        var stage = Contribution(foreground);
         var stageSet = stage.ToHashSet();
-        var strip = new List<WindowId>();
-
-        foreach (var id in monitor.Stage)
-        {
-            if (!stageSet.Contains(id))
-            {
-                strip.Add(id);
-            }
-        }
-
-        foreach (var id in ordered)
-        {
-            if (!stageSet.Contains(id) && !strip.Contains(id))
-            {
-                strip.Add(id);
-            }
-        }
 
         monitor.Stage.Clear();
         monitor.Stage.AddRange(stage);
         monitor.Strip.Clear();
-        monitor.Strip.AddRange(strip);
+
+        foreach (var id in ordered)
+        {
+            if (!stageSet.Contains(id))
+            {
+                monitor.Strip.Add(id);
+            }
+        }
+
         monitor.Foreground = foreground;
+        monitor.ActiveAppId = snapshot.AppId;
+    }
+
+    private List<WindowId> Contribution(WindowId window)
+    {
+        var snapshot = _windows[window];
+        var monitor = _monitors[snapshot.MonitorId];
+        var contribution = new List<WindowId> { window };
+
+        if (_mode != WindowMode.AllAtOnce)
+        {
+            return contribution;
+        }
+
+        foreach (var id in monitor.Stage.Concat(monitor.Strip).Distinct())
+        {
+            if (id == window)
+            {
+                continue;
+            }
+
+            var candidate = _windows[id];
+            if (candidate.AppId == snapshot.AppId
+                && candidate.IsVisible
+                && !candidate.IsMinimized)
+            {
+                contribution.Add(id);
+            }
+        }
+
+        return contribution;
+    }
+
+    private void ReplaceApp(MonitorData monitor, WindowId window)
+    {
+        var snapshot = _windows[window];
+        var displaced = monitor.Stage
+            .Where(id => _windows[id].AppId == snapshot.AppId)
+            .ToList();
+
+        foreach (var id in displaced)
+        {
+            monitor.Stage.Remove(id);
+        }
+
+        var contribution = Contribution(window);
+        monitor.Stage.InsertRange(0, contribution);
+        foreach (var id in contribution)
+        {
+            monitor.Strip.Remove(id);
+        }
+
+        var contributed = contribution.ToHashSet();
+        monitor.Strip.InsertRange(0, displaced.Where(id => !contributed.Contains(id)));
+        monitor.Foreground = window;
         monitor.ActiveAppId = snapshot.AppId;
     }
 

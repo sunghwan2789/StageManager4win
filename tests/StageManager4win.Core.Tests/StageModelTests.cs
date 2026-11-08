@@ -248,6 +248,25 @@ public class StageModelTests
     }
 
     [Fact]
+    public void Restore_ReturnsMonitorToTheCapturedState()
+    {
+        var model = new StageModel();
+        model.Reset(new[] { W(1, "A"), W(2, "B"), W(3, "C") }, new WindowId(1));
+        var previous = model.Monitors["M1"];
+
+        model.SetForeground(new WindowId(3));
+        AssertOrder(new[] { new WindowId(3) }, model.Monitors["M1"].Stage);
+
+        model.Restore(previous);
+
+        var m = model.Monitors["M1"];
+        AssertOrder(new[] { new WindowId(1) }, m.Stage);
+        AssertOrder(new[] { new WindowId(2), new WindowId(3) }, m.Strip);
+        Assert.Equal(new WindowId(1), m.Foreground);
+        Assert.Equal("A", m.ActiveAppId);
+    }
+
+    [Fact]
     public void ReorderStrip_AppliesRequestedOrderAndKeepsTheRest()
     {
         var model = new StageModel();

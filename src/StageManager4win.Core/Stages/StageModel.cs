@@ -68,6 +68,22 @@ public sealed class StageModel
 
     public bool Activate(WindowId window) => SetForeground(window);
 
+    public void Restore(MonitorState state)
+    {
+        if (!_monitors.TryGetValue(state.MonitorId, out var monitor))
+        {
+            monitor = new MonitorData();
+            _monitors[state.MonitorId] = monitor;
+        }
+
+        monitor.Stage.Clear();
+        monitor.Stage.AddRange(state.Stage);
+        monitor.Strip.Clear();
+        monitor.Strip.AddRange(state.Strip);
+        monitor.Foreground = state.Foreground;
+        monitor.ActiveAppId = state.ActiveAppId;
+    }
+
     public void SetMode(WindowMode mode)
     {
         _mode = mode;

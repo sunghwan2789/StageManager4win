@@ -697,11 +697,22 @@ internal sealed class StageCoordinator : IDisposable
 
     private void ActivateWindow(WindowId window)
     {
-        if (!_model.Windows.TryGetValue(window, out var snapshot) || !_model.Activate(window))
+        if (!_model.Windows.TryGetValue(window, out var snapshot))
         {
             FileLogger.Default.Write(
                 "activate",
-                $"window={window.Value} app={snapshot?.AppId ?? "?"} reason=model");
+                $"window={window.Value} app=? reason=model");
+            Reconcile();
+            StatusMessage?.Invoke("Windows refused to activate the window.");
+            return;
+        }
+
+        _model.Monitors.TryGetValue(snapshot.MonitorId, out var previous);
+        if (!_model.Activate(window))
+        {
+            FileLogger.Default.Write(
+                "activate",
+                $"window={window.Value} app={snapshot.AppId} reason=model");
             Reconcile();
             StatusMessage?.Invoke("Windows refused to activate the window.");
             return;
@@ -720,6 +731,11 @@ internal sealed class StageCoordinator : IDisposable
         Refresh();
         if (!activated)
         {
+            if (previous is not null)
+            {
+                _model.Restore(previous);
+            }
+
             FileLogger.Default.Write(
                 "activate",
                 $"window={window.Value} app={snapshot.AppId} reason=foreground");

@@ -142,9 +142,21 @@ internal sealed class OverlayWindow : Form
                     break;
                 case WmDpiChanged:
                     var dpi = (uint)(message.WParam.ToInt64() & 0xFFFF);
+                    FileLogger.Default.Write("overlay", $"dpi={dpi}");
                     UpdateDpi(dpi);
+                    // The overlay is a full-monitor surface, so the suggested
+                    // rect is not authoritative. Keep the monitor bounds and
+                    // skip DefWindowProc's resize.
+                    PInvoke.SetWindowPos(
+                        new HWND(Handle),
+                        new HWND(0),
+                        Monitor.Bounds.Left,
+                        Monitor.Bounds.Top,
+                        Monitor.Bounds.Width,
+                        Monitor.Bounds.Height,
+                        SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
                     DpiChanged?.Invoke(dpi);
-                    break;
+                    return;
                 case WmGetObject:
                     // UiaReturnRawElementProvider checks lParam itself; filtering here
                     // would hide the provider from the MSAA hit-test path.

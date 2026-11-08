@@ -112,6 +112,8 @@ internal sealed class WindowSource
 
     public WindowBounds GetBounds(nint handle) => GetBounds(new HWND(handle));
 
+    public bool IsVisible(nint handle) => PInvoke.IsWindowVisible(new HWND(handle));
+
     private static uint GetProcessId(HWND hwnd)
     {
         PInvoke.GetWindowThreadProcessId(hwnd, out var processId);

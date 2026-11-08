@@ -167,15 +167,24 @@ internal sealed class OverlayWindow : Form
 
                         if (_dragging)
                         {
-                            DragMoved?.Invoke(drag, dx, dy);
                             var front = _frontTiles.FirstOrDefault(tile => tile.Window == drag);
-                            _ghost = front is null
-                                ? null
-                                : new RectD(
-                                    front.BoundsDip.X + dx,
-                                    front.BoundsDip.Y + dy,
-                                    front.BoundsDip.Width,
-                                    front.BoundsDip.Height);
+                            if (front is null)
+                            {
+                                DragMoved?.Invoke(drag, dx, dy);
+                                _ghost = null;
+                            }
+                            else
+                            {
+                                var hit = TileStack.HitBounds(front.BoundsDip);
+                                var (clampedDx, clampedDy) = ClampGhost(hit, dx, dy);
+                                DragMoved?.Invoke(drag, clampedDx, clampedDy);
+                                _ghost = new RectD(
+                                    hit.X + clampedDx,
+                                    hit.Y + clampedDy,
+                                    hit.Width,
+                                    hit.Height);
+                            }
+
                             UpdateRegion();
                             return;
                         }
@@ -207,7 +216,7 @@ internal sealed class OverlayWindow : Form
                                 TileClicked?.Invoke(window);
                             }
                         }
-                        else if (wasDragging && DragGesture.Outside(_stripBounds, upPoint.X, upPoint.Y))
+                        else if (wasDragging && ShouldDrop(upPoint))
                         {
                             TileDropped?.Invoke(window);
                         }
@@ -374,6 +383,22 @@ internal sealed class OverlayWindow : Form
         }
     }
 
+    private (double Dx, double Dy) ClampGhost(RectD hit, double dx, double dy)
+    {
+        var width = ClientSize.Width * 96.0 / _dpi;
+        var height = ClientSize.Height * 96.0 / _dpi;
+        return (
+            Math.Clamp(dx, -hit.X, Math.Max(-hit.X, width - hit.X - hit.Width)),
+            Math.Clamp(dy, -hit.Y, Math.Max(-hit.Y, height - hit.Y - hit.Height)));
+    }
+
+    private bool ShouldDrop(PointF point) =>
+        DragGesture.ShouldDrop(
+            new RectD(0, 0, ClientSize.Width * 96.0 / _dpi, ClientSize.Height * 96.0 / _dpi),
+            _stripBounds,
+            point.X,
+            point.Y);
+
     private unsafe void UpdateRegion()
     {
         if (!IsHandleCreated)
@@ -386,7 +411,7 @@ internal sealed class OverlayWindow : Form
         {
             foreach (var placement in _placements)
             {
-                AddRect(region, TileStack.HitBounds(placement.Bounds));
+                AddRect(region, placement.Bounds);
             }
 
             if (_ghost is { } ghost)

@@ -424,12 +424,14 @@ public sealed class StageModel
             .Where(id => _windows[id].AppId == snapshot.AppId)
             .ToList();
 
+        // Compute the contribution before removing the displaced windows: Contribution scans
+        // the stage and strip, so removing first would hide same-app siblings from it.
+        var contribution = Contribution(window);
         foreach (var id in displaced)
         {
             monitor.Stage.Remove(id);
         }
 
-        var contribution = Contribution(window);
         monitor.Stage.InsertRange(0, contribution);
         foreach (var id in contribution)
         {

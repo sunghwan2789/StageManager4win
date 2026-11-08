@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using StageManager4win.Core.Layout;
 using StageManager4win.Core.Windows;
 using StageManager4win.Rendering;
 
@@ -51,11 +52,12 @@ public sealed class StripUiaProvider :
             for (var index = 0; index < tiles.Count; index++)
             {
                 var tile = tiles[index];
+                var stack = TileStack.HitBounds(tile.BoundsDip);
                 var rectangle = new UiaRect(
-                    originX + tile.BoundsDip.X * scale,
-                    originY + tile.BoundsDip.Y * scale,
-                    tile.BoundsDip.Width * scale,
-                    tile.BoundsDip.Height * scale);
+                    originX + stack.X * scale,
+                    originY + stack.Y * scale,
+                    stack.Width * scale,
+                    stack.Height * scale);
                 if (!existingTiles.TryGetValue(tile.Window, out var tileProvider))
                 {
                     tileProvider = new TileUiaProvider(this, tile.Window, _invoke);

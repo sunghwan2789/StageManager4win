@@ -96,7 +96,7 @@ internal sealed class StageCoordinator : IDisposable
         _watcher.Start();
         _desktopClick = new DesktopClickWatcher(IsOverStrip);
         _desktopClick.WallpaperClicked += ShowDesktop;
-        _desktopClick.Start();
+        UpdateDesktopClickWatcher();
         Refresh();
     }
 
@@ -154,6 +154,7 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         _settings = next;
+        UpdateDesktopClickWatcher();
         _model.SetMode(_settings.WindowMode);
         _render.Post(new RenderCommand.SetPreviewFps(_settings.PreviewFps));
         Reconcile();
@@ -234,7 +235,12 @@ internal sealed class StageCoordinator : IDisposable
         _autoHide.Dispose();
         _watcher.Raised -= OnWindowEvent;
         _watcher.Dispose();
-        _desktopClick?.Dispose();
+        if (_desktopClick is not null)
+        {
+            _desktopClick.WallpaperClicked -= ShowDesktop;
+            _desktopClick.Dispose();
+        }
+
         _desktopClick = null;
         _debounce.Stop();
         _debounce.Dispose();
@@ -253,6 +259,15 @@ internal sealed class StageCoordinator : IDisposable
 
     private void OnWindowEvent(WindowEventKind kind, nint hwnd)
     {
+        if (_moving is { } moving
+            && kind == WindowEventKind.Changed
+            && hwnd == (nint)moving.Window.Value
+            && !_source.IsVisible(hwnd))
+        {
+            _moving = null;
+            _autoHide.Suppress(false);
+        }
+
         switch (kind)
         {
             case WindowEventKind.MoveSizeStart:
@@ -277,6 +292,11 @@ internal sealed class StageCoordinator : IDisposable
 
     private void OnMoveSizeStart(nint hwnd)
     {
+        if (!_settings.Enabled || Suspended)
+        {
+            return;
+        }
+
         var id = new WindowId(hwnd);
         if (!_model.Windows.TryGetValue(id, out var snapshot)
             || !_model.Monitors.TryGetValue(snapshot.MonitorId, out var state)
@@ -293,9 +313,14 @@ internal sealed class StageCoordinator : IDisposable
     private void OnMoveSizeEnd(nint hwnd)
     {
         var moving = _moving;
+        if (moving is null || moving.Window != new WindowId(hwnd))
+        {
+            return;
+        }
+
         _moving = null;
         _autoHide.Suppress(false);
-        if (moving is null || moving.Window != new WindowId(hwnd))
+        if (!_settings.Enabled || Suspended)
         {
             return;
         }
@@ -379,42 +404,28 @@ internal sealed class StageCoordinator : IDisposable
             var ordered = new List<WindowId>();
             foreach (var identity in monitor.StripOrder)
             {
-                if (FindWindow(state.Strip, identity, used) is { } id)
+                foreach (var id in state.Strip)
                 {
-                    ordered.Add(id);
-                    used.Add(id);
+                    if (used.Contains(id) || !_model.Windows.TryGetValue(id, out var snapshot))
+                    {
+                        continue;
+                    }
+
+                    if (snapshot.AppId == identity.AppId && snapshot.Title == identity.Title)
+                    {
+                        ordered.Add(id);
+                        used.Add(id);
+                        break;
+                    }
                 }
             }
 
             _model.ReorderStrip(monitor.MonitorId, ordered);
 
-            if (monitor.Stage is { Count: > 0 } stageOrder)
+            var current = _model.Monitors[monitor.MonitorId];
+            if (WorkspaceRestore.Plan(current, monitor, _model.Windows) is { } restored)
             {
-                var staged = new HashSet<WindowId>();
-                var stage = new List<WindowId>();
-                foreach (var identity in stageOrder)
-                {
-                    if (FindWindow(state.Strip, identity, staged) is { } id)
-                    {
-                        stage.Add(id);
-                        staged.Add(id);
-                    }
-                }
-
-                var strip = state.Strip.Where(id => !staged.Contains(id)).ToList();
-                var foregroundId = monitor.Foreground is { } foregroundIdentity
-                    ? FindWindow(state.Strip, foregroundIdentity, new HashSet<WindowId>())
-                    : null;
-                var activeAppId = foregroundId is { } activeId
-                    && _model.Windows.TryGetValue(activeId, out var foregroundSnapshot)
-                        ? foregroundSnapshot.AppId
-                        : null;
-                _model.Restore(new MonitorState(
-                    monitor.MonitorId,
-                    stage,
-                    strip,
-                    foregroundId,
-                    activeAppId));
+                _model.Restore(restored);
             }
             else if (monitor.Foreground is { } foreground)
             {
@@ -430,25 +441,6 @@ internal sealed class StageCoordinator : IDisposable
                 }
             }
         }
-    }
-
-    private WindowId? FindWindow(
-        IReadOnlyList<WindowId> candidates,
-        WindowIdentity identity,
-        HashSet<WindowId> used)
-    {
-        foreach (var id in candidates)
-        {
-            if (!used.Contains(id)
-                && _model.Windows.TryGetValue(id, out var snapshot)
-                && snapshot.AppId == identity.AppId
-                && snapshot.Title == identity.Title)
-            {
-                return id;
-            }
-        }
-
-        return null;
     }
 
     private void ScheduleWorkspaceSave()
@@ -555,6 +547,7 @@ internal sealed class StageCoordinator : IDisposable
         if (fullscreen != _fullscreenPaused)
         {
             _fullscreenPaused = fullscreen;
+            UpdateDesktopClickWatcher();
             _render.Post(new RenderCommand.SetCapturePaused(Suspended));
         }
 
@@ -590,6 +583,7 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         _sessionPaused = paused;
+        UpdateDesktopClickWatcher();
         _render.Post(new RenderCommand.SetCapturePaused(Suspended));
         if (paused)
         {
@@ -657,16 +651,36 @@ internal sealed class StageCoordinator : IDisposable
                 continue;
             }
 
-            var scale = 96.0 / monitor.Dpi;
+            var scale = 96.0 / _dpiByMonitor.GetValueOrDefault(monitor.Id, monitor.Dpi);
             var x = (point.X - monitor.Bounds.Left) * scale;
             var y = (point.Y - monitor.Bounds.Top) * scale;
-            if (!DragGesture.Outside(area.StripBoundsDip, x, y))
+            foreach (var tile in area.TilesDip)
             {
-                return true;
+                if (!DragGesture.Outside(TileStack.HitBounds(tile), x, y))
+                {
+                    return true;
+                }
             }
         }
 
         return false;
+    }
+
+    private void UpdateDesktopClickWatcher()
+    {
+        if (_desktopClick is null)
+        {
+            return;
+        }
+
+        if (_settings.Enabled && !Suspended && !_disposed)
+        {
+            _desktopClick.Start();
+        }
+        else
+        {
+            _desktopClick.Stop();
+        }
     }
 
     private void SetAutoHideVisible(string monitorId, bool visible)
@@ -827,7 +841,8 @@ internal sealed class StageCoordinator : IDisposable
 
                 var group = item.Group;
                 var count = group.Windows.Count;
-                for (var index = 0; index < count; index++)
+                // Back-to-front for z-order, while the first window keeps StackIndex 0 (the front card).
+                for (var index = count - 1; index >= 0; index--)
                 {
                     var id = group.Windows[index];
                     if (!_model.Windows.TryGetValue(id, out var snapshot))
@@ -847,7 +862,7 @@ internal sealed class StageCoordinator : IDisposable
                         snapshot.Title,
                         highContrast,
                         borderBgra,
-                        count - 1 - index,
+                        index,
                         count,
                         group.Front));
                 }

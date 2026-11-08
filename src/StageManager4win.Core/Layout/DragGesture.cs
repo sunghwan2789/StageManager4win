@@ -12,4 +12,7 @@ public static class DragGesture
         || y < bounds.Y
         || x >= bounds.X + bounds.Width
         || y >= bounds.Y + bounds.Height;
+
+    public static bool ShouldDrop(RectD monitor, RectD strip, double x, double y) =>
+        !Outside(monitor, x, y) && Outside(strip, x, y);
 }

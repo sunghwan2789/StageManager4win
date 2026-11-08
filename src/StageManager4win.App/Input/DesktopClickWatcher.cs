@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using StageManager4win.Core.Diagnostics;
 using StageManager4win.Core.Input;
 using Windows.Win32;
 using Windows.Win32.Foundation;
@@ -35,6 +36,23 @@ internal sealed class DesktopClickWatcher : IDisposable
         }
 
         _hook = PInvoke.SetWindowsHookEx(WINDOWS_HOOK_ID.WH_MOUSE_LL, _callback, default, 0);
+        if (!_hook.IsInvalid)
+        {
+            return;
+        }
+
+        FileLogger.Default.Write(
+            "desktop-click",
+            $"hook install failed {Marshal.GetLastWin32Error()}");
+        _hook.Dispose();
+        _hook = null;
+    }
+
+    public void Stop()
+    {
+        _tracking = false;
+        _hook?.Dispose();
+        _hook = null;
     }
 
     public void Dispose()
@@ -45,8 +63,7 @@ internal sealed class DesktopClickWatcher : IDisposable
         }
 
         _disposed = true;
-        _hook?.Dispose();
-        _hook = null;
+        Stop();
     }
 
     private LRESULT OnMouse(int nCode, WPARAM wParam, LPARAM lParam)
@@ -76,10 +93,9 @@ internal sealed class DesktopClickWatcher : IDisposable
 
     private void HandleDown(LPARAM lParam)
     {
-        var point = PointOf(lParam);
-        _tracking = IsWallpaper(point);
-        _downPoint = point;
+        _downPoint = PointOf(lParam);
         _downTick = Environment.TickCount64;
+        _tracking = true;
     }
 
     private void HandleUp(LPARAM lParam)
@@ -94,10 +110,27 @@ internal sealed class DesktopClickWatcher : IDisposable
         var elapsed = Environment.TickCount64 - _downTick;
         var dx = point.X - _downPoint.X;
         var dy = point.Y - _downPoint.Y;
-        if (DesktopClick.IsToggle(dx, dy, elapsed))
+        if (!DesktopClick.IsToggle(dx, dy, elapsed))
         {
-            _context.Post(_ => WallpaperClicked?.Invoke(), null);
+            return;
         }
+
+        // The hook must stay cheap: MSAA runs on the UI thread after the callback returns.
+        var downPoint = _downPoint;
+        _context.Post(
+            _ =>
+            {
+                if (_disposed || _hook is null)
+                {
+                    return;
+                }
+
+                if (IsWallpaper(downPoint))
+                {
+                    WallpaperClicked?.Invoke();
+                }
+            },
+            null);
     }
 
     private static Point PointOf(LPARAM lParam)
@@ -110,12 +143,7 @@ internal sealed class DesktopClickWatcher : IDisposable
     {
         try
         {
-            if (_isOverlayPoint(point) || !IsDesktopWindow(point) || IsIconAt(point))
-            {
-                return false;
-            }
-
-            return true;
+            return !_isOverlayPoint(point) && IsDesktopWindow(point) && !IsIconAt(point);
         }
         catch (Exception)
         {
@@ -162,9 +190,10 @@ internal sealed class DesktopClickWatcher : IDisposable
     private static bool IsIconAt(Point point)
     {
         IAccessible? accessible = null;
+        object? child = null;
         try
         {
-            if (PInvoke.AccessibleObjectFromPoint(point, out accessible, out var child).Failed
+            if (PInvoke.AccessibleObjectFromPoint(point, out accessible, out child).Failed
                 || accessible is null)
             {
                 return true;
@@ -183,10 +212,16 @@ internal sealed class DesktopClickWatcher : IDisposable
         }
         finally
         {
-            if (accessible is not null && Marshal.IsComObject(accessible))
-            {
-                Marshal.ReleaseComObject(accessible);
-            }
+            ReleaseCom(child);
+            ReleaseCom(accessible);
+        }
+    }
+
+    private static void ReleaseCom(object? value)
+    {
+        if (value is not null && Marshal.IsComObject(value))
+        {
+            Marshal.ReleaseComObject(value);
         }
     }
 }

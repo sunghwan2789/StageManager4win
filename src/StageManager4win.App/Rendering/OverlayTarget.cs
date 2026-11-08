@@ -52,7 +52,7 @@ internal sealed class OverlayTarget : IDisposable
             var front = tile.Group == default ? tile.Window : tile.Group;
             var baseOffsetX = (float)(tile.BoundsDip.X * scale);
             var baseOffsetY = (float)(tile.BoundsDip.Y * scale);
-            var borderPixels = tile.HighContrast
+            var borderPixels = tile.HighContrast && tile.StackIndex == 0
                 ? (uint)Math.Max(1, Math.Round(2 * scale))
                 : 0;
             var width = Math.Max(1, (int)Math.Ceiling(tile.BoundsDip.Width * scale));

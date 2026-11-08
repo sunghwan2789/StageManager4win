@@ -413,4 +413,34 @@ public class StageModelTests
             new[] { new WindowId(3), new WindowId(1) },
             model.Monitors["M1"].Stage);
     }
+
+    [Fact]
+    public void AllAtOnce_ForegroundingSameAppSibling_KeepsEverySiblingOnStage()
+    {
+        var model = new StageModel(WindowMode.AllAtOnce);
+        model.Reset(new[] { W(1, "A"), W(2, "B"), W(3, "B") }, new WindowId(1));
+        model.AddToStage(new WindowId(2));
+
+        model.SetForeground(new WindowId(3));
+
+        var m = model.Monitors["M1"];
+        Assert.Contains(new WindowId(2), m.Stage);
+        Assert.Contains(new WindowId(3), m.Stage);
+        Assert.DoesNotContain(new WindowId(2), m.Strip);
+    }
+
+    [Fact]
+    public void AllAtOnce_AddToStageSameApp_KeepsEverySiblingOnStage()
+    {
+        var model = new StageModel(WindowMode.AllAtOnce);
+        model.Reset(new[] { W(1, "A"), W(2, "B"), W(3, "B") }, new WindowId(1));
+        model.AddToStage(new WindowId(2));
+
+        model.AddToStage(new WindowId(3));
+
+        var m = model.Monitors["M1"];
+        Assert.Contains(new WindowId(2), m.Stage);
+        Assert.Contains(new WindowId(3), m.Stage);
+        Assert.DoesNotContain(new WindowId(2), m.Strip);
+    }
 }

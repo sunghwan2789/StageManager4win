@@ -87,3 +87,17 @@ UiaGetReservedNotSupportedValue
 SwitchToThisWindow
 keybd_event
 KEYBD_EVENT_FLAGS
+SetWindowsHookEx
+UnhookWindowsHookEx
+CallNextHookEx
+WINDOWS_HOOK_ID
+HOOKPROC
+MSLLHOOKSTRUCT
+WM_LBUTTONDOWN
+WM_LBUTTONUP
+WindowFromPoint
+GetAncestor
+GET_ANCESTOR_FLAGS
+GetParent
+AccessibleObjectFromPoint
+ROLE_SYSTEM_LISTITEM

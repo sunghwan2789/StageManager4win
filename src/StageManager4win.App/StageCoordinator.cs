@@ -11,6 +11,7 @@ using StageManager4win.Input;
 using StageManager4win.Overlay;
 using StageManager4win.Rendering;
 using StageManager4win.Windows;
+using Windows.Win32.Foundation;
 
 namespace StageManager4win;
 
@@ -38,6 +39,7 @@ internal sealed class StageCoordinator : IDisposable
     private readonly System.Windows.Forms.Timer _workspaceSave = new() { Interval = 1000 };
     private readonly WorkspaceStateStore _workspace;
     private readonly AutoHideController _autoHide;
+    private DesktopClickWatcher? _desktopClick;
     private AppSettings _settings;
     private IReadOnlyList<MonitorDescriptor> _monitors = Array.Empty<MonitorDescriptor>();
     private CycleCursor? _cycle;
@@ -92,6 +94,9 @@ internal sealed class StageCoordinator : IDisposable
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         _watcher.Raised += OnWindowEvent;
         _watcher.Start();
+        _desktopClick = new DesktopClickWatcher(IsOverStrip);
+        _desktopClick.WallpaperClicked += ShowDesktop;
+        _desktopClick.Start();
         Refresh();
     }
 
@@ -229,6 +234,8 @@ internal sealed class StageCoordinator : IDisposable
         _autoHide.Dispose();
         _watcher.Raised -= OnWindowEvent;
         _watcher.Dispose();
+        _desktopClick?.Dispose();
+        _desktopClick = null;
         _debounce.Stop();
         _debounce.Dispose();
         _cycleReset.Stop();
@@ -592,6 +599,27 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         return _stripAreas.GetValueOrDefault(monitorId);
+    }
+
+    private bool IsOverStrip(Point point)
+    {
+        foreach (var monitor in _monitors)
+        {
+            if (!_stripAreas.TryGetValue(monitor.Id, out var area))
+            {
+                continue;
+            }
+
+            var scale = 96.0 / monitor.Dpi;
+            var x = (point.X - monitor.Bounds.Left) * scale;
+            var y = (point.Y - monitor.Bounds.Top) * scale;
+            if (!DragGesture.Outside(area.StripBoundsDip, x, y))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void SetAutoHideVisible(string monitorId, bool visible)

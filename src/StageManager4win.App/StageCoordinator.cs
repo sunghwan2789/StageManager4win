@@ -581,16 +581,18 @@ internal sealed class StageCoordinator : IDisposable
             var toDip = dpi > 0 ? 96.0 / dpi : 1.0;
             var state = states.GetValueOrDefault(monitor.Id);
             var strip = state?.Strip ?? Array.Empty<WindowId>();
+            var groups = StripGrouping.Group(strip, _model.Windows);
             var first = Math.Clamp(
                 _firstVisibleIndex.GetValueOrDefault(monitor.Id),
                 0,
-                Math.Max(0, strip.Count - 1));
+                Math.Max(0, groups.Count - 1));
             _firstVisibleIndex[monitor.Id] = first;
 
-            var items = new List<StripItem>(Math.Min(maxItems, strip.Count));
-            foreach (var id in strip.Skip(first).Take(maxItems))
+            var items = new List<StripItem>(Math.Min(maxItems, groups.Count));
+            var emitted = new List<(StripGroup Group, double Aspect)>(Math.Min(maxItems, groups.Count));
+            foreach (var group in groups.Skip(first).Take(maxItems))
             {
-                if (!_model.Windows.TryGetValue(id, out var snapshot))
+                if (!_model.Windows.TryGetValue(group.Front, out var snapshot))
                 {
                     continue;
                 }
@@ -601,14 +603,15 @@ internal sealed class StageCoordinator : IDisposable
                 // A minimized window reports its icon-rail rect; keep its last real
                 // aspect so the tile keeps the last captured frame.
                 var aspect = snapshot.IsMinimized
-                    ? _lastAspect.GetValueOrDefault(id, boundsAspect)
+                    ? _lastAspect.GetValueOrDefault(group.Front, boundsAspect)
                     : boundsAspect;
                 if (!snapshot.IsMinimized)
                 {
-                    _lastAspect[id] = boundsAspect;
+                    _lastAspect[group.Front] = boundsAspect;
                 }
 
-                items.Add(new StripItem(id, aspect));
+                items.Add(new StripItem(group.Front, aspect));
+                emitted.Add((group, aspect));
             }
 
             var options = new StripLayoutOptions(
@@ -618,6 +621,7 @@ internal sealed class StageCoordinator : IDisposable
                 monitor.WorkArea.Height * toDip,
                 _settings.StripEdge);
             var layout = StripLayoutCalculator.Calculate(items, options);
+            overlay.SetStripBounds(layout.StripBounds);
             if (layout.Tiles.Count == 0)
             {
                 _stripAreas.Remove(monitor.Id);
@@ -649,25 +653,40 @@ internal sealed class StageCoordinator : IDisposable
             }
 
             var tiles = new List<TileVisual>(layout.Tiles.Count);
+            var groupsByFront = emitted.ToDictionary(item => item.Group.Front);
             foreach (var placement in layout.Tiles)
             {
-                if (!_model.Windows.TryGetValue(placement.Window, out var snapshot))
+                if (!groupsByFront.TryGetValue(placement.Window, out var item))
                 {
                     continue;
                 }
 
-                tiles.Add(new TileVisual(
-                    placement.Window,
-                    placement.Bounds,
-                    TileCornerRadiusDip,
-                    GetIcon(snapshot),
-                    snapshot.IsMinimized,
-                    (nint)placement.Window.Value,
-                    snapshot.AppId,
-                    snapshot.AppName,
-                    snapshot.Title,
-                    highContrast,
-                    borderBgra));
+                var group = item.Group;
+                var count = group.Windows.Count;
+                for (var index = 0; index < count; index++)
+                {
+                    var id = group.Windows[index];
+                    if (!_model.Windows.TryGetValue(id, out var snapshot))
+                    {
+                        continue;
+                    }
+
+                    tiles.Add(new TileVisual(
+                        id,
+                        placement.Bounds,
+                        TileCornerRadiusDip,
+                        GetIcon(snapshot),
+                        snapshot.IsMinimized,
+                        (nint)id.Value,
+                        snapshot.AppId,
+                        snapshot.AppName,
+                        snapshot.Title,
+                        highContrast,
+                        borderBgra,
+                        count - 1 - index,
+                        count,
+                        group.Front));
+                }
             }
 
             var autoHideVisible = !_settings.AutoHide
@@ -752,7 +771,7 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         var count = _model.Monitors.TryGetValue(monitorId, out var state)
-            ? state.Strip.Count
+            ? StripGrouping.Group(state.Strip, _model.Windows).Count
             : 0;
         var first = _firstVisibleIndex.GetValueOrDefault(monitorId) + Math.Sign(delta);
         _firstVisibleIndex[monitorId] = Math.Clamp(first, 0, Math.Max(0, count - 1));

@@ -41,6 +41,7 @@ internal sealed class StageCoordinator : IDisposable
     private AppSettings _settings;
     private IReadOnlyList<MonitorDescriptor> _monitors = Array.Empty<MonitorDescriptor>();
     private CycleCursor? _cycle;
+    private MovingWindow? _moving;
     private string? _cycleMonitorId;
     private bool _rebuildPending;
     private bool _started;
@@ -245,6 +246,16 @@ internal sealed class StageCoordinator : IDisposable
 
     private void OnWindowEvent(WindowEventKind kind, nint hwnd)
     {
+        switch (kind)
+        {
+            case WindowEventKind.MoveSizeStart:
+                OnMoveSizeStart(hwnd);
+                return;
+            case WindowEventKind.MoveSizeEnd:
+                OnMoveSizeEnd(hwnd);
+                return;
+        }
+
         if (kind == WindowEventKind.DesktopSwitch)
         {
             _rebuildPending = true;
@@ -255,6 +266,67 @@ internal sealed class StageCoordinator : IDisposable
         {
             _debounce.Start();
         }
+    }
+
+    private void OnMoveSizeStart(nint hwnd)
+    {
+        var id = new WindowId(hwnd);
+        if (!_model.Windows.TryGetValue(id, out var snapshot)
+            || !_model.Monitors.TryGetValue(snapshot.MonitorId, out var state)
+            || !state.Stage.Contains(id))
+        {
+            return;
+        }
+
+        var bounds = _source.GetBounds(hwnd);
+        _moving = new MovingWindow(id, snapshot.MonitorId, bounds.Width, bounds.Height);
+        _autoHide.Suppress(true);
+    }
+
+    private void OnMoveSizeEnd(nint hwnd)
+    {
+        var moving = _moving;
+        _moving = null;
+        _autoHide.Suppress(false);
+        if (moving is null || moving.Window != new WindowId(hwnd))
+        {
+            return;
+        }
+
+        if (!_model.Windows.TryGetValue(moving.Window, out var snapshot))
+        {
+            return;
+        }
+
+        var monitor = _monitors.FirstOrDefault(candidate => candidate.Id == moving.MonitorId);
+        if (monitor is null || !_stripAreas.TryGetValue(monitor.Id, out var area))
+        {
+            return;
+        }
+
+        var bounds = _source.GetBounds(hwnd);
+        var dpi = _dpiByMonitor.GetValueOrDefault(monitor.Id, monitor.Dpi);
+        var scale = dpi > 0 ? 96.0 / dpi : 1.0;
+        var cursor = Cursor.Position;
+        var x = (cursor.X - monitor.Bounds.Left) * scale;
+        var y = (cursor.Y - monitor.Bounds.Top) * scale;
+        var onTile = area.TilesDip.Any(tile => !DragGesture.Outside(tile, x, y));
+        if (!StageRemoval.ShouldRemove(
+                wasOnStage: true,
+                sameMonitor: snapshot.MonitorId == moving.MonitorId,
+                startWidth: moving.Width,
+                startHeight: moving.Height,
+                endWidth: bounds.Width,
+                endHeight: bounds.Height,
+                cursorOnTile: onTile))
+        {
+            return;
+        }
+
+        _model.RemoveFromStage(moving.Window);
+        WindowActivation.Minimize(moving.Window);
+        Refresh();
+        ScheduleWorkspaceSave();
     }
 
     private void OnDebounceTick()
@@ -882,4 +954,6 @@ internal sealed class StageCoordinator : IDisposable
 
         return icon ?? _fallbackIcon;
     }
+
+    private sealed record MovingWindow(WindowId Window, string MonitorId, int Width, int Height);
 }

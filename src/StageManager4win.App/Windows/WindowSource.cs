@@ -110,6 +110,8 @@ internal sealed class WindowSource
         return snapshots;
     }
 
+    public WindowBounds GetBounds(nint handle) => GetBounds(new HWND(handle));
+
     private static uint GetProcessId(HWND hwnd)
     {
         PInvoke.GetWindowThreadProcessId(hwnd, out var processId);

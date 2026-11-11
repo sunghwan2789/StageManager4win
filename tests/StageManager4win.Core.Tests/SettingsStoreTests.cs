@@ -37,7 +37,6 @@ public sealed class SettingsStoreTests : IDisposable
             WindowMode = WindowMode.AllAtOnce,
             AutoHide = true,
             StripEdge = StripEdge.Right,
-            MaxVisibleStripItems = 5,
             PreviewFps = 60,
             Hotkeys = new HotkeySettings(new(3, 0x41), new(3, 0x42), new(3, 0x43), new(3, 0x44)),
             ExcludedAppIds = new[] { "app.one", "app.two" }
@@ -50,7 +49,6 @@ public sealed class SettingsStoreTests : IDisposable
         Assert.Equal(settings.WindowMode, loaded.WindowMode);
         Assert.Equal(settings.AutoHide, loaded.AutoHide);
         Assert.Equal(settings.StripEdge, loaded.StripEdge);
-        Assert.Equal(settings.MaxVisibleStripItems, loaded.MaxVisibleStripItems);
         Assert.Equal(settings.PreviewFps, loaded.PreviewFps);
         Assert.Equal(settings.Hotkeys, loaded.Hotkeys);
         Assert.Equal(settings.ExcludedAppIds, loaded.ExcludedAppIds);
@@ -73,12 +71,10 @@ public sealed class SettingsStoreTests : IDisposable
     {
         var normalized = new AppSettings
         {
-            MaxVisibleStripItems = 0,
             PreviewFps = 24,
             ExcludedAppIds = new[] { "", "  ", "app.one" }
         }.Normalize();
 
-        Assert.Equal(8, normalized.MaxVisibleStripItems);
         Assert.Equal(30, normalized.PreviewFps);
         Assert.Equal(new[] { "app.one" }, normalized.ExcludedAppIds);
     }

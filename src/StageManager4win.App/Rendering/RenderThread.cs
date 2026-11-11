@@ -269,7 +269,7 @@ internal sealed class RenderThread : IDisposable
             case RenderCommand.UpdateOverlay update:
                 if (_targets.TryGetValue(update.MonitorId, out var target))
                 {
-                    target.Update(update.Tiles, update.Visible);
+                    target.Update(update.Tiles, update.Visible, update.ClipDip);
                     _tilesByMonitor[update.MonitorId] = update.Tiles;
                     _visibleByMonitor[update.MonitorId] = update.Visible;
                     SyncCaptureRequests();

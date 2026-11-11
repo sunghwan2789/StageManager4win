@@ -14,6 +14,7 @@ internal static class TileShader
             float4 BorderRect;  // xy = border thickness in UV units
             float4 BorderColor;
             float4 Tint;
+            float4 Warp;        // x = far vertical scale, z = far opacity
         };
 
         Texture2D TileTexture : register(t0);
@@ -36,22 +37,36 @@ internal static class TileShader
 
         float4 PSMain(VertexOutput input) : SV_Target
         {
-            if (BorderRect.x > 0.0
-                && (input.Uv.x < BorderRect.x
-                    || input.Uv.x > 1.0 - BorderRect.x
-                    || input.Uv.y < BorderRect.y
-                    || input.Uv.y > 1.0 - BorderRect.y))
+            // The far side is shorter and dimmer, like a card leaning away
+            // from the screen edge. The left edge stays full height.
+            float halfLoss = (1.0 - Warp.x) * 0.5;
+            float top = input.Uv.x * halfLoss;
+            float bottom = 1.0 - input.Uv.x * halfLoss;
+            if (input.Uv.y < top || input.Uv.y > bottom)
             {
-                return float4(BorderColor.rgb * Tint.x, BorderColor.a);
+                return float4(0.0, 0.0, 0.0, 0.0);
             }
 
-            float2 local = (input.Uv - UvRect.zw) / UvRect.xy;
+            float opacity = lerp(1.0, Warp.z, input.Uv.x);
+            float2 uv = float2(input.Uv.x, (input.Uv.y - top) / (bottom - top));
+
+            if (BorderRect.x > 0.0
+                && (uv.x < BorderRect.x
+                    || uv.x > 1.0 - BorderRect.x
+                    || uv.y < BorderRect.y
+                    || uv.y > 1.0 - BorderRect.y))
+            {
+                return float4(BorderColor.rgb * Tint.x * opacity, BorderColor.a * opacity);
+            }
+
+            float2 local = (uv - UvRect.zw) / UvRect.xy;
             if (any(local < 0.0) || any(local > 1.0))
             {
-                return float4(Background.rgb * Tint.x, Background.a);
+                return float4(Background.rgb * Tint.x * opacity, Background.a * opacity);
             }
 
-            return float4(TileTexture.Sample(TileSampler, local).rgb * Tint.x, 1.0);
+            float4 sample = TileTexture.Sample(TileSampler, local);
+            return float4(sample.rgb * Tint.x * opacity, sample.a * opacity);
         }
         """;
 

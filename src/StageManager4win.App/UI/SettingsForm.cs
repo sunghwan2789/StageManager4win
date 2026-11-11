@@ -38,13 +38,6 @@ public sealed class SettingsForm : Form
         var edge = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
         edge.Items.AddRange(new object[] { "Left", "Right" });
         edge.SelectedIndex = (int)settings.StripEdge;
-        var maxItems = new NumericUpDown
-        {
-            Minimum = 1,
-            Maximum = 12,
-            Value = Math.Clamp(settings.MaxVisibleStripItems, 1, 12),
-            Width = 80
-        };
         var fps = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
         fps.Items.AddRange(new object[] { 15, 30, 60 });
         fps.SelectedItem = settings.PreviewFps;
@@ -72,7 +65,6 @@ public sealed class SettingsForm : Form
         AddRow(layout, "Window mode", mode, row++);
         AddRow(layout, "Auto-hide", autoHide, row++);
         AddRow(layout, "Strip edge", edge, row++);
-        AddRow(layout, "Max visible strip items", maxItems, row++);
         AddRow(layout, "Preview FPS", fps, row++);
         AddRow(layout, "Excluded app IDs (one per line)", excluded, row++);
         AddRow(layout, "Toggle hotkey", toggle, row++);
@@ -95,7 +87,7 @@ public sealed class SettingsForm : Form
 
         ok.Click += (_, _) =>
         {
-            Result = BuildResult(settings, enabled, mode, autoHide, edge, maxItems, fps, excluded,
+            Result = BuildResult(settings, enabled, mode, autoHide, edge, fps, excluded,
                 toggle, next, previous, showDesktop);
             DialogResult = DialogResult.OK;
         };
@@ -126,7 +118,6 @@ public sealed class SettingsForm : Form
         ComboBox mode,
         CheckBox autoHide,
         ComboBox edge,
-        NumericUpDown maxItems,
         ComboBox fps,
         TextBox excluded,
         HotkeyTextBox toggle,
@@ -138,7 +129,6 @@ public sealed class SettingsForm : Form
             WindowMode = (WindowMode)mode.SelectedIndex,
             AutoHide = autoHide.Checked,
             StripEdge = (StripEdge)edge.SelectedIndex,
-            MaxVisibleStripItems = (int)maxItems.Value,
             PreviewFps = (int)(fps.SelectedItem ?? 30),
             Hotkeys = new HotkeySettings(
                 BindingOf(toggle, original.Hotkeys.Toggle),

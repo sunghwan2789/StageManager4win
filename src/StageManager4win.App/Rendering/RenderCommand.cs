@@ -9,7 +9,8 @@ internal abstract record RenderCommand
     internal sealed record UpdateOverlay(
         string MonitorId,
         IReadOnlyList<TileVisual> Tiles,
-        bool Visible) : RenderCommand;
+        bool Visible,
+        Core.Layout.RectD ClipDip) : RenderCommand;
 
     internal sealed record SetOverlayHover(string MonitorId, WindowId? Window) : RenderCommand;
 

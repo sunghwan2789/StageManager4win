@@ -204,7 +204,8 @@ internal sealed class DesktopClickWatcher : IDisposable
                 return true;
             }
 
-            return accessible.get_accRole(0) is int role && (uint)role == PInvoke.ROLE_SYSTEM_LISTITEM;
+            var role = accessible.get_accRole(0);
+            return role is int roleValue && (uint)roleValue == PInvoke.ROLE_SYSTEM_LISTITEM;
         }
         catch (Exception)
         {

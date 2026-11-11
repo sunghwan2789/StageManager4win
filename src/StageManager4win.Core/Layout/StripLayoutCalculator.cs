@@ -7,7 +7,7 @@ public static class StripLayoutCalculator
     public static StripLayout Calculate(
         IReadOnlyList<StripItem> items,
         StripLayoutOptions options,
-        int firstVisibleIndex = 0)
+        double scrollOffset = 0)
     {
         var stripWidth = Math.Clamp(
             options.MonitorWidth * options.StripWidthRatio,
@@ -19,44 +19,46 @@ public static class StripLayoutCalculator
             stripWidth,
             options.WorkAreaHeight);
 
-        var start = Math.Clamp(firstVisibleIndex, 0, items.Count);
-        var visible = new List<(WindowId Window, double Width, double Height)>();
-        var totalHeight = 0.0;
-
-        for (var index = start; index < items.Count; index++)
+        var sizes = new List<(WindowId Window, double Width, double Height)>(items.Count);
+        var contentHeight = 0.0;
+        for (var index = 0; index < items.Count; index++)
         {
             var aspect = NormalizeAspect(items[index].AspectRatio);
             var width = Math.Min(options.MaxTileWidth, options.MaxTileHeight * aspect);
             var height = width / aspect;
-
-            if (visible.Count > 0 && totalHeight + options.Gap + height > options.WorkAreaHeight)
+            if (index > 0)
             {
-                break;
+                contentHeight += options.Gap;
             }
 
-            if (visible.Count > 0)
-            {
-                totalHeight += options.Gap;
-            }
-
-            totalHeight += height;
-            visible.Add((items[index].Window, width, height));
+            contentHeight += height;
+            sizes.Add((items[index].Window, width, height));
         }
 
-        var y = options.WorkAreaTop + (options.WorkAreaHeight - totalHeight) / 2;
-        var tiles = new List<TilePlacement>(visible.Count);
+        // Scrolling moves the whole column; content that fits stays centered and
+        // ignores the wheel so items never disappear when there is nothing to scroll.
+        var maxScroll = Math.Max(0, contentHeight - options.WorkAreaHeight);
+        var offset = Math.Clamp(scrollOffset, 0, maxScroll);
+        var viewBottom = options.WorkAreaTop + options.WorkAreaHeight;
+        var y = maxScroll > 0
+            ? options.WorkAreaTop - offset
+            : options.WorkAreaTop + (options.WorkAreaHeight - contentHeight) / 2;
 
-        foreach (var (window, width, height) in visible)
+        var tiles = new List<TilePlacement>(sizes.Count);
+        foreach (var (window, width, height) in sizes)
         {
-            var x = options.Edge == StripEdge.Left
-                ? (stripWidth - width) / 2
-                : options.MonitorWidth - stripWidth + (stripWidth - width) / 2;
+            if (y < viewBottom && y + height > options.WorkAreaTop)
+            {
+                var x = options.Edge == StripEdge.Left
+                    ? (stripWidth - width) / 2
+                    : options.MonitorWidth - stripWidth + (stripWidth - width) / 2;
+                tiles.Add(new TilePlacement(window, new RectD(x, y, width, height)));
+            }
 
-            tiles.Add(new TilePlacement(window, new RectD(x, y, width, height)));
             y += height + options.Gap;
         }
 
-        return new StripLayout(tiles, stripBounds, start, tiles.Count);
+        return new StripLayout(tiles, stripBounds, contentHeight, maxScroll);
     }
 
     private static double NormalizeAspect(double aspect)

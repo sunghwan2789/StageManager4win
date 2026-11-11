@@ -17,6 +17,10 @@ internal sealed class OverlayWindow : Form
     private const int WmMouseMove = 0x0200;
     private const int WmLeftButtonDown = 0x0201;
     private const int WmLeftButtonUp = 0x0202;
+    // The overlay never activates, so its thread gets no key messages and
+    // GetKeyState (Control.ModifierKeys) reads Shift as up. The mouse message's
+    // wParam carries the shift state at click time.
+    private const int MkShift = 0x0004;
     private const int WmMouseWheel = 0x020A;
     private const int WmCaptureChanged = 0x0215;
     private const int WmMouseLeave = 0x02A3;
@@ -148,7 +152,7 @@ internal sealed class OverlayWindow : Form
 
                     _dragWindow = pressed;
                     _dragStart = pressedPoint;
-                    _dragShift = (Control.ModifierKeys & Keys.Shift) != 0;
+                    _dragShift = ((int)message.WParam & MkShift) != 0;
                     _dragging = false;
                     Capture = true;
                     return;
@@ -411,7 +415,11 @@ internal sealed class OverlayWindow : Form
         {
             foreach (var placement in _placements)
             {
-                AddRect(region, placement.Bounds);
+                var bounds = Intersect(placement.Bounds, _stripBounds);
+                if (bounds.Width > 0 && bounds.Height > 0)
+                {
+                    AddRect(region, bounds);
+                }
             }
 
             if (_ghost is { } ghost)
@@ -425,6 +433,17 @@ internal sealed class OverlayWindow : Form
         {
             PInvoke.DeleteObject(new HGDIOBJ(region.Value));
         }
+    }
+
+    private static RectD Intersect(RectD a, RectD b)
+    {
+        var left = Math.Max(a.X, b.X);
+        var top = Math.Max(a.Y, b.Y);
+        var right = Math.Min(a.X + a.Width, b.X + b.Width);
+        var bottom = Math.Min(a.Y + a.Height, b.Y + b.Height);
+        return right > left && bottom > top
+            ? new RectD(left, top, right - left, bottom - top)
+            : default;
     }
 
     private unsafe void AddRect(HRGN region, RectD bounds)

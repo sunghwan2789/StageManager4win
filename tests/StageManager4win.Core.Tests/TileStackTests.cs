@@ -9,19 +9,19 @@ public class TileStackTests
     {
         var bounds = TileStack.HitBounds(new RectD(100, 200, 160, 120));
 
-        Assert.Equal(92, bounds.X);
+        Assert.Equal(72, bounds.X);
         Assert.Equal(180, bounds.Y);
-        Assert.Equal(176, bounds.Width);
-        Assert.Equal(140, bounds.Height);
+        Assert.Equal(216, bounds.Width);
+        Assert.Equal(148, bounds.Height);
     }
 
     [Fact]
     public void Card_FrontIsUnchanged()
     {
         var card = TileStack.Card(0);
+        Assert.Equal(0, card.OffsetX);
         Assert.Equal(0, card.OffsetY);
         Assert.Equal(1, card.Scale);
-        Assert.Equal(0, card.RotationDegrees);
         Assert.Equal(1f, card.Dim);
     }
 
@@ -29,9 +29,34 @@ public class TileStackTests
     public void Card_BackCardsRecedeAndDarken()
     {
         Assert.True(TileStack.Card(1).OffsetY < 0);
+        Assert.True(TileStack.Card(1).OffsetX < 0);
         Assert.True(TileStack.Card(1).Scale < 1);
         Assert.True(TileStack.Card(1).Dim < 1f);
         Assert.True(TileStack.Card(2).OffsetY < TileStack.Card(1).OffsetY);
+        Assert.True(TileStack.Card(2).OffsetX < TileStack.Card(1).OffsetX);
+    }
+
+    [Fact]
+    public void TiltSlope_FansAwayFromTheScreenCenter()
+    {
+        var above = TileStack.TiltSlope(100, 400, 400, 200, 140);
+        var middle = TileStack.TiltSlope(400, 400, 400, 200, 140);
+        var below = TileStack.TiltSlope(700, 400, 400, 200, 140);
+
+        Assert.True(above > 0);
+        Assert.Equal(0, middle, 6);
+        Assert.True(below < 0);
+        Assert.Equal(-above, below, 6);
+    }
+
+    [Fact]
+    public void TiltSlope_ClampsAtTheEdges()
+    {
+        var extreme = TileStack.TiltSlope(0, 400, 400, 200, 140);
+        var beyond = TileStack.TiltSlope(-100, 400, 400, 200, 140);
+
+        Assert.Equal(extreme, beyond, 6);
+        Assert.Equal(TileStack.TiltShiftRatio * 140 / 200, extreme, 6);
     }
 
     [Fact]

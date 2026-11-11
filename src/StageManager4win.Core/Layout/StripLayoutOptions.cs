@@ -10,5 +10,5 @@ public sealed record StripLayoutOptions(
     double MaxTileHeight = 120,
     double Gap = 30,
     double StripWidthRatio = 0.12,
-    double MinStripWidth = 160,
+    double MinStripWidth = 220,
     double MaxStripWidth = 320);

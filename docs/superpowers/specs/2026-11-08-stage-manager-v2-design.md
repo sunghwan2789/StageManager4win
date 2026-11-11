@@ -8,7 +8,8 @@ Decisions: one tile per app, drawn as a small stack of that app's windows; multi
 
 v1 shipped window-level stages: one tile per window, one app's windows on the stage at a time. v2 closes the gaps the user picked:
 
-- the strip shows one tile per app, drawn like the macOS stack: the front window live, up to two windows behind it, tilted and darkened
+- the strip shows one tile per app, drawn like the macOS stack: the front window live, up to two windows behind it, offset and dimmed (no twist inside a stack)
+- each app tile carries a slight alternating lean, and the app icon badge sits at the tile's bottom-left
 - a stage can hold several apps
 - dragging a tile onto the desktop, or Shift-clicking it, adds its app to the stage
 - dragging an on-stage window onto the strip removes it, and minimizing has the same effect
@@ -105,7 +106,7 @@ Walk `state.Strip` once and group by `AppId`, ordered by each app's first occurr
 
 The group is emitted as up to three `TileVisual`s sharing one rect: the layout rect of the front window. `TileVisual` gains `int StackIndex` (0 front, 1 and 2 back) and `int AppWindowCount`. Back visuals are capture sources too, so the renderer creates a surface for each and the existing capture loop starts a session for each; no capture-set change is needed. Windows beyond the third still exist and surface as earlier ones move.
 
-`MaxVisibleStripItems` now counts apps. `_firstVisibleIndex` and `Scroll` must clamp and advance over **groups**, not raw strip windows, or scrolling skips apps and can blank the strip. Build the group list first, then index into it.
+The strip scrolls as one column. `StripLayout` computes `ContentHeight` and `MaxScroll`; when the content fits, the column is centered and the wheel is ignored, so tiles never disappear. When it overflows, `scrollOffset` shifts every tile, and `OverlayWindow` clips both drawing and its window region to `StripBounds`. `StageCoordinator` animates the offset toward a target (64 DIP per wheel notch, 15 ms tick, 0.35 approach), so a wheel burst glides instead of jumping. There is no fixed visible-item cap; `MaxVisibleStripItems` is gone.
 
 An app with a window on the stage still gets a strip tile if it has another window off-stage (One at a Time, multi-window app). Clicking it swaps that app's stage contribution, so no window becomes unreachable; repeated clicks cycle that app's windows in One at a Time.
 
@@ -123,7 +124,7 @@ Activation moves from button-down to button-up so a drag can be told from a clic
 
 The overlay is already full-monitor, so no new window or hook is needed for tile drags. Drops only land on the source monitor; dragging off the monitor cancels.
 
-Hit testing uses the tile rect expanded upward and sideways by `TileStack.Overflow` (16 DIP up, 4 DIP sides), so the peeking back cards are part of the target. The 30 DIP layout gap keeps adjacent groups from overlapping.
+Hit testing uses the tile rect expanded by `TileStack.HitBounds` (20 DIP up, 8 DIP down, 28 DIP per side), so the peeking back cards are part of the target. The 30 DIP layout gap keeps adjacent groups from overlapping.
 
 ### 6.4 Rendering: the stack and the ghost
 
@@ -131,11 +132,15 @@ Each group is drawn back-to-front in the existing visual list:
 
 | card | offset (DIP) | scale | rotation | dim |
 |---|---|---|---|---|
-| back 2 | 0, -11 | 0.92 | +2.0° | 0.40 |
-| back 1 | 0, -6 | 0.96 | -2.5° | 0.60 |
-| front | 0, 0 | 1.0 | 0 | 1.0 |
+| back 2 | -28, -8 | 0.94 | none | 0.8 |
+| back 1 | -14, -4 | 0.97 | none | 0.9 |
+| front | 0, 0 | 1.0 | none | 1.0 |
 
-Offsets are upward only, so the stack looks the same on the left and right edges. Rotation and scale are applied with `IDCompositionVisual.SetTransform` around the card's center; the existing rectangle clip rotates with the card, so corners stay rounded. `TilePainter` gains a dim constant: the pixel shader multiplies the sampled colour by it (`1.0` for the front, the table values for the back). The front keeps the existing border; back cards draw no border. `OverlayTarget.Update` re-adds its visuals in list order so z-order follows the group order after cards are added or removed.
+Same-app cards only recede: offset left and up, smaller, dimmer, no twist. The perspective belongs to the tile position, not the app index. Each tile is a trapezoid whose far (right) edge is shorter and more transparent than the near (left) edge: the pixel shader scales the far edge to 0.86 and fades it to 0.72 alpha while the left edge keeps full height and opacity. Tiles above the strip's vertical center lean the far edge down, tiles below lean it up, fanning away from the middle like the macOS example; `TileStack.TiltSlope` returns that vertical shear (`TiltShiftRatio = 0.08`). The shear is applied with `IDCompositionVisual.SetTransform` to a card visual inside a container visual, so the rectangle clip leans with the card and the icon badge stays upright. `TilePainter` gains dim, far-scale, and far-alpha constants: the pixel shader multiplies the sampled colour by them (`1.0` for the front, the table values for the back). The front keeps the existing border; back cards draw no border.
+
+Only the front card carries the app icon badge: width 30% of the tile width clamped to 28–52 DIP, inset 6 DIP, corner radius 8 DIP, painted from the app icon by `TilePainter`.
+
+Minimized strip windows stay fully opaque so a live-looking preview is not washed out; hovering dims the non-hovered neighbours to 0.92. `OverlayTarget.Update` rebuilds the child list in reverse emission order because DirectComposition places each newly added child in front; otherwise the back cards land above their front card.
 
 The ghost reuses the group: `RenderCommand.UpdateDragGhost(monitorId, window, pointDip)` draws the same cards at the pointer, clamped to the monitor. While a ghost exists, `OverlayWindow.UpdateRegion` unions the strip rects with the stack rect of the dragged group; the region returns to normal on drop/cancel.
 
@@ -163,14 +168,21 @@ A `WH_MOUSE_LL` hook on the UI thread, installed only while the app is enabled:
   - `LVM_HITTEST` is not used: it is above `WM_USER`, pointer-bearing messages are not marshalled cross-process, and sending it to Explorer is unsafe.
 - Ignore the taskbar, our own overlay, and any point inside a strip tile.
 - Toggling while the desktop is already shown restores the windows, matching the macOS click-again behaviour.
+- The toggle does not call `Shell.Application.ToggleDesktop`, which is a no-op on current Windows 11 builds. The first click snapshots each monitor's stage, minimizes its windows with `SW_MINIMIZE`, and hides the strip; the second click restores the stage and windows, then re-activates the previous foreground window.
 
 The hook never swallows input and never runs Shell or COM work inside the callback.
 
-### 6.7 Persistence
+### 6.7 Strip scrolling
+
+The overlay is `WS_EX_NOACTIVATE`, so it never receives `WM_MOUSEWHEEL`; a `WH_MOUSE_LL` hook (`Input/StripWheelWatcher`) forwards each wheel delta with the cursor point to the UI thread and always calls `CallNextHookEx`, so the wheel still reaches the window under the pointer.
+
+`OnStripWheel` resolves the monitor whose tile stack contains the point, requires `MaxScroll > 0`, then adds `delta / 120 * 64 DIP` to the target. `OnScrollTick` moves the offset 35% of the remaining distance every 15 ms and stops within 0.5 DIP. Off-strip wheels change nothing.
+
+### 6.8 Persistence
 
 `MonitorWorkspace` gains `IReadOnlyList<WindowIdentity>? Stage`. Save/restore includes it. A v1 workspace file without the field deserializes as `null`, which the loader maps to an empty list; the restored `Foreground` then stages that app exactly as v1 did. No migration code.
 
-### 6.8 Accessibility
+### 6.9 Accessibility
 
 Group tiles stay `Button` elements keyed by the representative window. The name becomes `"App — title"`, or `"App — N windows"` when the group holds more than one off-stage window; the automation id stays `AppId|Title` of the representative. The bounds are the stack rect. Invoking a tile runs the click path (replace or swap).
 
@@ -208,11 +220,11 @@ Core (unit, extend `StageModelTests`):
 - minimize still removes, and removing the foreground clears it
 - workspace round-trip with a stage; a v1 file loads with an empty stage
 
-Layout (unit): `StripBounds` for both edges; grouping order and cycle order; group-aware scroll clamping.
+Layout (unit): `StripBounds` for both edges; grouping order and cycle order; overflow detection, scroll clamping at both ends, and centered content when it fits.
 
 Interaction helpers (unit): drag threshold, drop-inside/outside, and the removal predicate (on stage, same monitor, same size, cursor on a tile).
 
-Manual checks: stack drawing and z-order, ghost and region, drop outside adds, Shift-click adds, drop inside cancels, window drag to a tile minimises, window drag to the edge snaps instead, minimize removes, wallpaper click toggles, icon click does not, auto-hide stays visible during a drag, UIA names and the add child.
+Manual checks: stack drawing and z-order, icon badge, per-app lean, ghost and region, drop outside adds, Shift-click adds, drop inside cancels, window drag to a tile minimises, window drag to the edge snaps instead, minimize removes, wallpaper click toggles, icon click does not, auto-hide stays visible during a drag, wheel scrolls and clips with both ends clamped, UIA names and the add child.
 
 ## 9. Phases
 
@@ -239,6 +251,9 @@ None blocking. The stack offsets, the drop tolerance, and the ghost scale are bu
 - The window-drag test requires an unchanged window size, which excludes Aero Snap and resizes.
 - The drop target is a strip tile, not the whole strip column; the column only drives reveal.
 - Wallpaper detection uses MSAA on the UI thread and never `LVM_HITTEST`.
-- Grouping is always on; no new setting. `MaxVisibleStripItems` now counts apps.
+- Grouping is always on; no new setting, and the fixed visible-item cap is gone. The strip scrolls whenever its content overflows.
 - Back cards are live captures darkened in the shader; no new capture type.
+- Same-app cards do not twist; the alternating lean is per app tile so the strip reads as separate apps.
+- Tiles stay opaque even while minimized; only back cards and hovered-out neighbours dim.
+- Wheel input comes from a low-level hook because the no-activate overlay is never the focus window.
 - No new dependency, no new window, no new thread.

@@ -70,6 +70,13 @@ internal sealed class WindowSource
     public unsafe bool IsFullscreen(nint handle)
     {
         var hwnd = new HWND(handle);
+        // The desktop covers the monitor but is not an app. Counting it as
+        // fullscreen would suspend the strip on every wallpaper click.
+        if (hwnd == HWND.Null || hwnd == PInvoke.GetShellWindow())
+        {
+            return false;
+        }
+
         var bounds = GetBounds(hwnd);
         var monitor = PInvoke.MonitorFromWindow(hwnd, MONITOR_FROM_FLAGS.MONITOR_DEFAULTTONEAREST);
         var info = new MONITORINFO();
@@ -111,6 +118,17 @@ internal sealed class WindowSource
     }
 
     public WindowBounds GetBounds(nint handle) => GetBounds(new HWND(handle));
+
+    public WindowBounds GetRestoreBounds(nint handle)
+    {
+        var placement = new WINDOWPLACEMENT
+        {
+            length = (uint)Marshal.SizeOf<WINDOWPLACEMENT>()
+        };
+        return PInvoke.GetWindowPlacement(new HWND(handle), ref placement)
+            ? ToBounds(placement.rcNormalPosition)
+            : GetBounds(handle);
+    }
 
     public bool IsVisible(nint handle) => PInvoke.IsWindowVisible(new HWND(handle));
 

@@ -9,7 +9,6 @@ public sealed record AppSettings
     public WindowModes WindowMode { get; init; } = WindowModes.OneAtATime;
     public bool AutoHide { get; init; }
     public StripEdges StripEdge { get; init; } = StripEdges.Left;
-    public int MaxVisibleStripItems { get; init; } = 8;
     public int PreviewFps { get; init; } = 30;
     public HotkeySettings Hotkeys { get; init; } = HotkeySettings.Default;
     public IReadOnlyList<string> ExcludedAppIds { get; init; } = Array.Empty<string>();
@@ -18,7 +17,6 @@ public sealed record AppSettings
     {
         WindowMode = Enum.IsDefined(WindowMode) ? WindowMode : WindowModes.OneAtATime,
         StripEdge = Enum.IsDefined(StripEdge) ? StripEdge : StripEdges.Left,
-        MaxVisibleStripItems = MaxVisibleStripItems is >= 1 and <= 12 ? MaxVisibleStripItems : 8,
         PreviewFps = NormalizeFps(PreviewFps),
         Hotkeys = Hotkeys ?? HotkeySettings.Default,
         ExcludedAppIds = (ExcludedAppIds ?? Array.Empty<string>())

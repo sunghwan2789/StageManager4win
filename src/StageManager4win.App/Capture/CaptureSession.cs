@@ -5,11 +5,14 @@ using Windows.Graphics;
 using Windows.Graphics.Capture;
 using Windows.Graphics.DirectX;
 using Windows.Graphics.DirectX.Direct3D11;
+using Windows.Win32;
+using Windows.Win32.Foundation;
 
 namespace StageManager4win.Capture;
 
 internal sealed class CaptureSession : IDisposable
 {
+    private readonly nint _hwnd;
     private readonly IDirect3DDevice _device;
     private readonly Direct3D11CaptureFramePool _pool;
     private readonly GraphicsCaptureSession _session;
@@ -19,6 +22,7 @@ internal sealed class CaptureSession : IDisposable
 
     public CaptureSession(nint hwnd, IDirect3DDevice device)
     {
+        _hwnd = hwnd;
         _device = device;
         var item = GraphicsCaptureInterop.CreateItemForWindow(hwnd);
         Direct3D11CaptureFramePool? pool = null;
@@ -167,6 +171,13 @@ internal sealed class CaptureSession : IDisposable
 
         if (frame is null)
         {
+            return;
+        }
+
+        // A minimizing window can emit a blank frame; keep the last good one.
+        if (PInvoke.IsIconic(new HWND(_hwnd)))
+        {
+            frame.Dispose();
             return;
         }
 

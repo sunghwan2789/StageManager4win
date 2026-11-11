@@ -61,34 +61,52 @@ public class StripLayoutTests
     }
 
     [Fact]
-    public void Overflow_LimitsVisibleCount()
+    public void Overflow_ReportsScrollRange()
     {
         var items = Enumerable.Range(1, 8).Select(i => Item(i, 1)).ToArray();
 
         var layout = StripLayoutCalculator.Calculate(items, Options);
 
-        Assert.Equal(7, layout.VisibleCount);
-        Assert.Equal(7, layout.Tiles.Count);
+        // Eight 120-high tiles plus seven 30 gaps = 1170; the view is 1055.
+        Assert.Equal(1170, layout.ContentHeight, 3);
+        Assert.Equal(115, layout.MaxScroll, 3);
+        Assert.Equal(8, layout.Tiles.Count);
+        Assert.Equal(25, layout.Tiles[0].Bounds.Y, 3);
     }
 
     [Fact]
-    public void FirstVisibleIndex_SkipsItems()
+    public void ScrollOffset_MovesContentUp()
     {
         var items = Enumerable.Range(1, 8).Select(i => Item(i, 1)).ToArray();
 
-        var layout = StripLayoutCalculator.Calculate(items, Options, firstVisibleIndex: 2);
+        var layout = StripLayoutCalculator.Calculate(items, Options, scrollOffset: 50);
 
-        Assert.Equal(2, layout.FirstVisibleIndex);
-        Assert.Equal(new WindowId(3), layout.Tiles[0].Window);
+        Assert.Equal(-25, layout.Tiles[0].Bounds.Y, 3);
     }
 
     [Fact]
-    public void FirstVisibleIndex_IsClamped()
+    public void ScrollOffset_IsClampedToTheEnd()
     {
-        var layout = StripLayoutCalculator.Calculate(new[] { Item(1, 1) }, Options, firstVisibleIndex: 99);
+        var items = Enumerable.Range(1, 8).Select(i => Item(i, 1)).ToArray();
 
-        Assert.Empty(layout.Tiles);
-        Assert.Equal(1, layout.FirstVisibleIndex);
+        var layout = StripLayoutCalculator.Calculate(items, Options, scrollOffset: 9999);
+
+        Assert.Equal(-90, layout.Tiles[0].Bounds.Y, 3);
+        var last = layout.Tiles[^1].Bounds;
+        Assert.Equal(1080, last.Y + last.Height, 3);
+    }
+
+    [Fact]
+    public void FittingContent_IgnoresScrollOffset()
+    {
+        var items = new[] { Item(1, 1), Item(2, 1) };
+
+        var centered = StripLayoutCalculator.Calculate(items, Options);
+        var scrolled = StripLayoutCalculator.Calculate(items, Options, scrollOffset: 500);
+
+        Assert.Equal(0, centered.MaxScroll, 3);
+        Assert.Equal(centered.Tiles[0].Bounds.Y, scrolled.Tiles[0].Bounds.Y, 3);
+        Assert.Equal(25 + (1055 - 270) / 2.0, scrolled.Tiles[0].Bounds.Y, 3);
     }
 
     [Fact]
@@ -98,8 +116,8 @@ public class StripLayoutTests
 
         var layout = StripLayoutCalculator.Calculate(new[] { Item(1, 4.0 / 3.0) }, options);
 
-        // Strip width 205.2, tile width 160: x = 1710 - 205.2 + 22.6.
-        Assert.Equal(1527.4, layout.Tiles[0].Bounds.X, 3);
+        // Strip width 220, tile width 160: x = 1710 - 220 + 30.
+        Assert.Equal(1520, layout.Tiles[0].Bounds.X, 3);
     }
 
     [Fact]
@@ -109,8 +127,8 @@ public class StripLayoutTests
 
         var layout = StripLayoutCalculator.Calculate(new[] { Item(1, 1) }, narrow);
 
-        // 800 * 0.12 = 96, clamped to 160; tile 120 wide -> x = 20.
-        Assert.Equal(20, layout.Tiles[0].Bounds.X, 3);
+        // 800 * 0.12 = 96, clamped to 220; tile 120 wide -> x = 50.
+        Assert.Equal(50, layout.Tiles[0].Bounds.X, 3);
     }
 
     [Fact]

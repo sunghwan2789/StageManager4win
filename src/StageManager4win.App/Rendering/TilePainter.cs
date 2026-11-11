@@ -13,8 +13,12 @@ internal static class TilePainter
     // A 1x1 bitmap is a solid tile; larger bitmaps are letterboxed as app icons.
     private const float IconScale = 0.6f;
 
+    // The bound constant buffer must be at least as large as the shader's cbuffer,
+    // or fields past the end (Tint) read as zero and black out every tile.
+    public static uint ConstantBufferSize => (uint)Marshal.SizeOf<TileConstants>();
+
     [StructLayout(LayoutKind.Sequential)]
-    private struct TileConstants
+    internal struct TileConstants
     {
         public Vector2 UvScale;
         public Vector2 UvOffset;
@@ -22,6 +26,7 @@ internal static class TilePainter
         public Vector4 BorderRect;
         public Vector4 BorderColor;
         public Vector4 Tint;
+        public Vector4 Warp;
     }
 
     public static unsafe void Paint(
@@ -32,7 +37,10 @@ internal static class TilePainter
         uint height,
         uint borderPixels,
         uint borderBgra,
-        float dim = 1f)
+        float dim = 1f,
+        float coverage = IconScale,
+        float farScale = 1f,
+        float farAlpha = 1f)
     {
         var expected = checked(bitmap.Width * bitmap.Height * 4);
         if (bitmap.Bgra.Length < expected)
@@ -69,7 +77,7 @@ internal static class TilePainter
             device.D3D11Device.CreateShaderResourceView(iconTexture, null, out view);
 
             var isSolid = bitmap.Width == 1 && bitmap.Height == 1;
-            var scale = isSolid ? 1f : IconScale;
+            var scale = isSolid ? 1f : coverage;
             var constants = new TileConstants
             {
                 UvScale = new Vector2(scale),
@@ -77,7 +85,8 @@ internal static class TilePainter
                 Background = new Vector4(0.08f, 0.08f, 0.10f, 1f),
                 BorderRect = BorderInUv(borderPixels, width, height),
                 BorderColor = ToColor(borderBgra),
-                Tint = new Vector4(dim, dim, dim, 1f)
+                Tint = new Vector4(dim, dim, dim, 1f),
+                Warp = new Vector4(farScale, 0f, farAlpha, 0f)
             };
             Draw(device, surface, view, constants, width, height);
         }
@@ -104,7 +113,9 @@ internal static class TilePainter
         Vector2 uvScale,
         uint borderPixels,
         uint borderBgra,
-        float dim = 1f)
+        float dim = 1f,
+        float farScale = 1f,
+        float farAlpha = 1f)
     {
         ID3D11ShaderResourceView? view = null;
         try
@@ -117,7 +128,8 @@ internal static class TilePainter
                 Background = new Vector4(0f, 0f, 0f, 1f),
                 BorderRect = BorderInUv(borderPixels, width, height),
                 BorderColor = ToColor(borderBgra),
-                Tint = new Vector4(dim, dim, dim, 1f)
+                Tint = new Vector4(dim, dim, dim, 1f),
+                Warp = new Vector4(farScale, 0f, farAlpha, 0f)
             };
             Draw(device, surface, view, constants, width, height);
         }

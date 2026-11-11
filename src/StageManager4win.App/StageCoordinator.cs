@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
-using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using StageManager4win.Core.Diagnostics;
 using StageManager4win.Core.Layout;
@@ -18,6 +16,7 @@ namespace StageManager4win;
 internal sealed class StageCoordinator : IDisposable
 {
     private const double TileCornerRadiusDip = 12;
+    private const double ScrollStepDip = 64;
     private const uint FallbackTileColor = 0xFF3B82F6;
 
     private readonly SettingsStore _store;
@@ -29,17 +28,23 @@ internal sealed class StageCoordinator : IDisposable
     private readonly Dictionary<string, OverlayWindow> _overlays = new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool> _visibleByMonitor = new(StringComparer.Ordinal);
     private readonly Dictionary<string, StripHitArea> _stripAreas = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, int> _firstVisibleIndex = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, double> _scrollOffset = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, double> _scrollTarget = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, double> _maxScroll = new(StringComparer.Ordinal);
     private readonly Dictionary<string, uint> _dpiByMonitor = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IconBitmap?> _icons = new(StringComparer.Ordinal);
     private readonly Dictionary<WindowId, double> _lastAspect = new();
+    private readonly HashSet<WindowId> _hiddenByApp = new();
     private readonly IconBitmap _fallbackIcon = IconBitmap.Solid(1, 1, FallbackTileColor);
     private readonly System.Windows.Forms.Timer _debounce = new() { Interval = 100 };
     private readonly System.Windows.Forms.Timer _cycleReset = new() { Interval = 2000 };
     private readonly System.Windows.Forms.Timer _workspaceSave = new() { Interval = 1000 };
+    private readonly System.Windows.Forms.Timer _hideStrip = new() { Interval = 1500 };
+    private readonly System.Windows.Forms.Timer _scrollAnim = new() { Interval = 15 };
     private readonly WorkspaceStateStore _workspace;
     private readonly AutoHideController _autoHide;
     private DesktopClickWatcher? _desktopClick;
+    private StripWheelWatcher? _stripWheel;
     private AppSettings _settings;
     private IReadOnlyList<MonitorDescriptor> _monitors = Array.Empty<MonitorDescriptor>();
     private CycleCursor? _cycle;
@@ -50,6 +55,10 @@ internal sealed class StageCoordinator : IDisposable
     private bool _disposed;
     private bool _sessionPaused;
     private bool _fullscreenPaused;
+    private bool _desktopShown;
+    private Dictionary<string, MonitorState>? _desktopStage;
+    private WindowId? _desktopForeground;
+    private long _stripHideReadyAt;
 
     public StageCoordinator(SettingsStore settingsStore)
     {
@@ -64,6 +73,8 @@ internal sealed class StageCoordinator : IDisposable
         _debounce.Tick += (_, _) => OnDebounceTick();
         _cycleReset.Tick += (_, _) => OnCycleResetTick();
         _workspaceSave.Tick += (_, _) => OnWorkspaceSaveTick();
+        _hideStrip.Tick += (_, _) => OnHideStripTick();
+        _scrollAnim.Tick += (_, _) => OnScrollTick();
     }
 
     public event Action<string>? StatusMessage;
@@ -96,8 +107,13 @@ internal sealed class StageCoordinator : IDisposable
         _watcher.Start();
         _desktopClick = new DesktopClickWatcher(IsOverStrip);
         _desktopClick.WallpaperClicked += ShowDesktop;
+        _stripWheel = new StripWheelWatcher(OnStripWheel);
         UpdateDesktopClickWatcher();
         Refresh();
+        // Let the first captures land before minimizing the strip, or every
+        // off-stage tile would show the icon fallback instead of its last frame.
+        _stripHideReadyAt = Environment.TickCount64 + 1200;
+        _hideStrip.Start();
     }
 
     private void CreateOverlay(MonitorDescriptor monitor)
@@ -160,6 +176,53 @@ internal sealed class StageCoordinator : IDisposable
         Reconcile();
     }
 
+    private void OnHideStripTick()
+    {
+        _hideStrip.Stop();
+        if (Environment.TickCount64 < _stripHideReadyAt)
+        {
+            _hideStrip.Start();
+            return;
+        }
+
+        HideOffStageWindows();
+        Refresh();
+    }
+
+    // The strip is the off-stage set; minimize it so off-stage windows do not
+    // sit behind the stage. Minimized tiles keep their last captured frame.
+    private void HideOffStageWindows()
+    {
+        if (!_started || !_settings.Enabled || Suspended
+            || Environment.TickCount64 < _stripHideReadyAt)
+        {
+            return;
+        }
+
+        var foreground = _source.GetForegroundWindow();
+        foreach (var state in _model.Monitors.Values)
+        {
+            foreach (var id in state.Strip)
+            {
+                if (id == foreground
+                    || !_model.Windows.TryGetValue(id, out var snapshot)
+                    || snapshot.IsMinimized)
+                {
+                    continue;
+                }
+
+                if (snapshot.Bounds.Height > 0)
+                {
+                    _lastAspect[id] = (double)snapshot.Bounds.Width / snapshot.Bounds.Height;
+                }
+
+                _model.Minimize(id);
+                WindowActivation.Minimize(id);
+                _hiddenByApp.Add(id);
+            }
+        }
+    }
+
     public void ToggleStripUnderPointer()
     {
         if (MonitorUnderPointer() is not { } monitorId)
@@ -196,30 +259,67 @@ internal sealed class StageCoordinator : IDisposable
         ActivateWindow(window);
     }
 
+    // The shell's ToggleDesktop is a no-op on some Windows 11 installs, so the
+    // stage is hidden and restored here instead.
     public void ShowDesktop()
     {
-        object? shell = null;
-        try
+        if (_desktopShown)
         {
-            var type = Type.GetTypeFromProgID("Shell.Application")
-                ?? throw new InvalidOperationException("Shell.Application is not available.");
-            shell = Activator.CreateInstance(type);
-            type.InvokeMember("ToggleDesktop", BindingFlags.InvokeMethod, null, shell, null);
-        }
-        catch (Exception exception)
-        {
-            FileLogger.Default.Write(
-                "desktop",
-                $"toggle hr=0x{exception.HResult:X8} {exception.GetType().Name}");
-            StatusMessage?.Invoke($"Could not show the desktop: {exception.Message}");
-        }
-        finally
-        {
-            if (shell is not null && Marshal.IsComObject(shell))
+            _desktopShown = false;
+            var saved = _desktopStage;
+            _desktopStage = null;
+            if (saved is not null)
             {
-                Marshal.ReleaseComObject(shell);
+                foreach (var state in saved.Values)
+                {
+                    var stage = state.Stage.Where(_model.Windows.ContainsKey).ToList();
+                    _model.Restore(state with { Stage = stage });
+                    foreach (var id in stage)
+                    {
+                        _model.Restore(id);
+                        WindowActivation.Restore(id);
+                        _hiddenByApp.Remove(id);
+                    }
+                }
+            }
+
+            if (_desktopForeground is { } foreground && _model.Windows.ContainsKey(foreground))
+            {
+                WindowActivation.Activate(foreground);
+            }
+
+            _desktopForeground = null;
+            Refresh();
+            return;
+        }
+
+        var hidden = new Dictionary<string, MonitorState>(StringComparer.Ordinal);
+        foreach (var state in _model.Monitors.Values)
+        {
+            hidden[state.MonitorId] = state;
+        }
+
+        if (hidden.Values.All(state => state.Stage.Count == 0))
+        {
+            return;
+        }
+
+        _desktopShown = true;
+        _desktopStage = hidden;
+        _desktopForeground = hidden.Values
+            .Select(state => state.Foreground)
+            .FirstOrDefault(id => id is not null);
+        foreach (var state in hidden.Values)
+        {
+            foreach (var id in state.Stage)
+            {
+                _model.Minimize(id);
+                WindowActivation.Minimize(id);
+                _hiddenByApp.Add(id);
             }
         }
+
+        Refresh();
     }
 
     public void Dispose()
@@ -242,12 +342,28 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         _desktopClick = null;
+        _stripWheel?.Dispose();
+        _stripWheel = null;
         _debounce.Stop();
         _debounce.Dispose();
         _cycleReset.Stop();
         _cycleReset.Dispose();
         _workspaceSave.Stop();
         _workspaceSave.Dispose();
+        _hideStrip.Stop();
+        _hideStrip.Dispose();
+        _scrollAnim.Stop();
+        _scrollAnim.Dispose();
+        // Don't leave the windows this app minimized hidden after it exits.
+        foreach (var id in _hiddenByApp)
+        {
+            if (_model.Windows.TryGetValue(id, out var snapshot) && snapshot.IsMinimized)
+            {
+                WindowActivation.RestoreNoActivate(id);
+            }
+        }
+
+        _hiddenByApp.Clear();
         foreach (var overlay in _overlays.Values)
         {
             overlay.Dispose();
@@ -292,21 +408,18 @@ internal sealed class StageCoordinator : IDisposable
 
     private void OnMoveSizeStart(nint hwnd)
     {
-        if (!_settings.Enabled || Suspended)
-        {
-            return;
-        }
-
         var id = new WindowId(hwnd);
-        if (!_model.Windows.TryGetValue(id, out var snapshot)
-            || !_model.Monitors.TryGetValue(snapshot.MonitorId, out var state)
-            || !state.Stage.Contains(id))
+        var known = _model.Windows.TryGetValue(id, out var snapshot);
+        var staged = known
+            && _model.Monitors.TryGetValue(snapshot!.MonitorId, out var state)
+            && state.Stage.Contains(id);
+        if (!_settings.Enabled || Suspended || !known || !staged)
         {
             return;
         }
 
         var bounds = _source.GetBounds(hwnd);
-        _moving = new MovingWindow(id, snapshot.MonitorId, bounds.Width, bounds.Height);
+        _moving = new MovingWindow(id, snapshot!.MonitorId, bounds.Width, bounds.Height);
         _autoHide.Suppress(true);
     }
 
@@ -343,20 +456,22 @@ internal sealed class StageCoordinator : IDisposable
         var x = (cursor.X - monitor.Bounds.Left) * scale;
         var y = (cursor.Y - monitor.Bounds.Top) * scale;
         var onTile = area.TilesDip.Any(tile => !DragGesture.Outside(tile, x, y));
-        if (!StageRemoval.ShouldRemove(
-                wasOnStage: true,
-                sameMonitor: snapshot.MonitorId == moving.MonitorId,
-                startWidth: moving.Width,
-                startHeight: moving.Height,
-                endWidth: bounds.Width,
-                endHeight: bounds.Height,
-                cursorOnTile: onTile))
+        var remove = StageRemoval.ShouldRemove(
+            wasOnStage: true,
+            sameMonitor: snapshot.MonitorId == moving.MonitorId,
+            startWidth: moving.Width,
+            startHeight: moving.Height,
+            endWidth: bounds.Width,
+            endHeight: bounds.Height,
+            cursorOnTile: onTile);
+        if (!remove)
         {
             return;
         }
 
         _model.RemoveFromStage(moving.Window);
         WindowActivation.Minimize(moving.Window);
+        _hiddenByApp.Add(moving.Window);
         Refresh();
         ScheduleWorkspaceSave();
     }
@@ -388,6 +503,9 @@ internal sealed class StageCoordinator : IDisposable
         LoadWorkspace();
         ScheduleWorkspaceSave();
         Refresh();
+        _stripHideReadyAt = Environment.TickCount64 + 1200;
+        _hideStrip.Stop();
+        _hideStrip.Start();
     }
 
     private void LoadWorkspace()
@@ -512,6 +630,7 @@ internal sealed class StageCoordinator : IDisposable
         {
             _model.Remove(id);
             _lastAspect.Remove(id);
+            _hiddenByApp.Remove(id);
         }
 
         foreach (var snapshot in snapshots)
@@ -533,15 +652,21 @@ internal sealed class StageCoordinator : IDisposable
                 else
                 {
                     _model.Restore(snapshot.Id);
+                    _hiddenByApp.Remove(snapshot.Id);
                 }
             }
         }
 
         var foreground = _source.GetForegroundWindow();
-        if (foreground is { } window && _model.Windows.ContainsKey(window))
+        // A window being minimized can still report as foreground; don't stage it again.
+        if (foreground is { } window
+            && _model.Windows.TryGetValue(window, out var foregroundSnapshot)
+            && !foregroundSnapshot.IsMinimized)
         {
             _model.SetForeground(window);
         }
+
+        HideOffStageWindows();
 
         var fullscreen = IsFullscreen(foreground);
         if (fullscreen != _fullscreenPaused)
@@ -615,7 +740,10 @@ internal sealed class StageCoordinator : IDisposable
 
         _overlays.Clear();
         _dpiByMonitor.Clear();
-        _firstVisibleIndex.Clear();
+        _scrollAnim.Stop();
+        _scrollOffset.Clear();
+        _scrollTarget.Clear();
+        _maxScroll.Clear();
         _visibleByMonitor.Clear();
         _stripAreas.Clear();
         _monitors = _display.GetMonitors();
@@ -642,7 +770,23 @@ internal sealed class StageCoordinator : IDisposable
         return _stripAreas.GetValueOrDefault(monitorId);
     }
 
-    private bool IsOverStrip(Point point)
+    private bool IsOverStrip(Point point) => MonitorOverStrip(point) is not null;
+
+    private void OnStripWheel(Point point, int delta)
+    {
+        if (_disposed || !_settings.Enabled || Suspended)
+        {
+            return;
+        }
+
+        if (MonitorOverStrip(point) is { } monitorId
+            && _maxScroll.GetValueOrDefault(monitorId) > 0)
+        {
+            Scroll(monitorId, delta);
+        }
+    }
+
+    private string? MonitorOverStrip(Point point)
     {
         foreach (var monitor in _monitors)
         {
@@ -658,12 +802,12 @@ internal sealed class StageCoordinator : IDisposable
             {
                 if (!DragGesture.Outside(TileStack.HitBounds(tile), x, y))
                 {
-                    return true;
+                    return monitor.Id;
                 }
             }
         }
 
-        return false;
+        return null;
     }
 
     private void UpdateDesktopClickWatcher()
@@ -676,10 +820,12 @@ internal sealed class StageCoordinator : IDisposable
         if (_settings.Enabled && !Suspended && !_disposed)
         {
             _desktopClick.Start();
+            _stripWheel?.Start();
         }
         else
         {
             _desktopClick.Stop();
+            _stripWheel?.Stop();
         }
     }
 
@@ -737,7 +883,6 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         var states = _model.Monitors;
-        var maxItems = Math.Max(1, _settings.MaxVisibleStripItems);
         var highContrast = SystemInformation.HighContrast;
         var borderBgra = highContrast ? ToBgra(SystemColors.WindowText) : 0;
         foreach (var monitor in _monitors)
@@ -752,15 +897,9 @@ internal sealed class StageCoordinator : IDisposable
             var state = states.GetValueOrDefault(monitor.Id);
             var strip = state?.Strip ?? Array.Empty<WindowId>();
             var groups = StripGrouping.Group(strip, _model.Windows);
-            var first = Math.Clamp(
-                _firstVisibleIndex.GetValueOrDefault(monitor.Id),
-                0,
-                Math.Max(0, groups.Count - 1));
-            _firstVisibleIndex[monitor.Id] = first;
-
-            var items = new List<StripItem>(Math.Min(maxItems, groups.Count));
-            var emitted = new List<(StripGroup Group, double Aspect)>(Math.Min(maxItems, groups.Count));
-            foreach (var group in groups.Skip(first).Take(maxItems))
+            var items = new List<StripItem>(groups.Count);
+            var emitted = new List<(StripGroup Group, double Aspect)>(groups.Count);
+            foreach (var group in groups)
             {
                 if (!_model.Windows.TryGetValue(group.Front, out var snapshot))
                 {
@@ -770,13 +909,20 @@ internal sealed class StageCoordinator : IDisposable
                 var boundsAspect = snapshot.Bounds.Height > 0
                     ? (double)snapshot.Bounds.Width / snapshot.Bounds.Height
                     : 4.0 / 3.0;
-                // A minimized window reports its icon-rail rect; keep its last real
-                // aspect so the tile keeps the last captured frame.
-                var aspect = snapshot.IsMinimized
-                    ? _lastAspect.GetValueOrDefault(group.Front, boundsAspect)
-                    : boundsAspect;
-                if (!snapshot.IsMinimized)
+                // A minimized window reports its icon-rail rect. Remember the last real
+                // aspect, and fall back to the restore rect after an app restart when
+                // that memory is gone but the windows are still minimized.
+                double aspect;
+                if (snapshot.IsMinimized)
                 {
+                    aspect = _lastAspect.TryGetValue(group.Front, out var remembered)
+                        ? remembered
+                        : RestoreAspect(group.Front);
+                    _lastAspect[group.Front] = aspect;
+                }
+                else
+                {
+                    aspect = boundsAspect;
                     _lastAspect[group.Front] = boundsAspect;
                 }
 
@@ -790,7 +936,15 @@ internal sealed class StageCoordinator : IDisposable
                 (monitor.WorkArea.Top - monitor.Bounds.Top) * toDip,
                 monitor.WorkArea.Height * toDip,
                 _settings.StripEdge);
-            var layout = StripLayoutCalculator.Calculate(items, options);
+            var layout = StripLayoutCalculator.Calculate(
+                items,
+                options,
+                _scrollOffset.GetValueOrDefault(monitor.Id));
+            _maxScroll[monitor.Id] = layout.MaxScroll;
+            _scrollOffset[monitor.Id] = Math.Clamp(
+                _scrollOffset.GetValueOrDefault(monitor.Id), 0, layout.MaxScroll);
+            _scrollTarget[monitor.Id] = Math.Clamp(
+                _scrollTarget.GetValueOrDefault(monitor.Id), 0, layout.MaxScroll);
             overlay.SetStripBounds(layout.StripBounds);
             var monitorWidth = monitor.Bounds.Width * toDip;
             var workTop = (monitor.WorkArea.Top - monitor.Bounds.Top) * toDip;
@@ -872,10 +1026,15 @@ internal sealed class StageCoordinator : IDisposable
                 || _visibleByMonitor.GetValueOrDefault(monitor.Id, true);
             var visible = _settings.Enabled
                 && !Suspended
+                && !_desktopShown
                 && autoHideVisible;
             overlay.SetTiles(tiles);
             overlay.SetVisible(visible);
-            _render.Post(new RenderCommand.UpdateOverlay(monitor.Id, tiles, visible));
+            _render.Post(new RenderCommand.UpdateOverlay(
+                monitor.Id,
+                tiles,
+                visible,
+                layout.StripBounds));
         }
     }
 
@@ -922,10 +1081,17 @@ internal sealed class StageCoordinator : IDisposable
             foreach (var id in state.Stage)
             {
                 WindowActivation.Restore(id);
+                _hiddenByApp.Remove(id);
             }
         }
 
         var activated = WindowActivation.Activate(window);
+        if (activated)
+        {
+            _hiddenByApp.Remove(window);
+            HideOffStageWindows();
+        }
+
         Refresh();
         if (!activated)
         {
@@ -962,10 +1128,17 @@ internal sealed class StageCoordinator : IDisposable
             foreach (var id in state.Stage)
             {
                 WindowActivation.Restore(id);
+                _hiddenByApp.Remove(id);
             }
         }
 
         var activated = WindowActivation.Activate(window);
+        if (activated)
+        {
+            _hiddenByApp.Remove(window);
+            HideOffStageWindows();
+        }
+
         Refresh();
         ScheduleWorkspaceSave();
         if (!activated)
@@ -990,12 +1163,45 @@ internal sealed class StageCoordinator : IDisposable
             return;
         }
 
-        var count = _model.Monitors.TryGetValue(monitorId, out var state)
-            ? StripGrouping.Group(state.Strip, _model.Windows).Count
-            : 0;
-        var first = _firstVisibleIndex.GetValueOrDefault(monitorId) + Math.Sign(delta);
-        _firstVisibleIndex[monitorId] = Math.Clamp(first, 0, Math.Max(0, count - 1));
+        var max = _maxScroll.GetValueOrDefault(monitorId);
+        if (max <= 0)
+        {
+            _scrollTarget[monitorId] = 0;
+            return;
+        }
+
+        // A wheel notch is 120; touchpads send smaller deltas, so scroll by distance.
+        var target = _scrollTarget.GetValueOrDefault(monitorId) - delta / 120.0 * ScrollStepDip;
+        _scrollTarget[monitorId] = Math.Clamp(target, 0, max);
+        if (!_scrollAnim.Enabled)
+        {
+            _scrollAnim.Start();
+        }
+    }
+
+    private void OnScrollTick()
+    {
+        var moving = false;
+        foreach (var monitorId in _scrollTarget.Keys.ToArray())
+        {
+            var target = _scrollTarget[monitorId];
+            var current = _scrollOffset.GetValueOrDefault(monitorId);
+            var difference = target - current;
+            if (Math.Abs(difference) < 0.5)
+            {
+                _scrollOffset[monitorId] = target;
+                continue;
+            }
+
+            _scrollOffset[monitorId] = current + difference * 0.35;
+            moving = true;
+        }
+
         Refresh();
+        if (!moving)
+        {
+            _scrollAnim.Stop();
+        }
     }
 
     private void OnDpiChanged(string monitorId, uint dpi)
@@ -1033,6 +1239,14 @@ internal sealed class StageCoordinator : IDisposable
 
     private static uint ToBgra(Color color) =>
         (uint)(color.B | (color.G << 8) | (color.R << 16) | (color.A << 24));
+
+    private double RestoreAspect(WindowId window)
+    {
+        var bounds = _source.GetRestoreBounds((nint)window.Value);
+        return bounds.Height > 0
+            ? (double)bounds.Width / bounds.Height
+            : 4.0 / 3.0;
+    }
 
     private IconBitmap GetIcon(WindowSnapshot snapshot)
     {

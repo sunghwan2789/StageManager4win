@@ -43,6 +43,7 @@ internal sealed class StageCoordinator : IDisposable
     private readonly System.Windows.Forms.Timer _scrollAnim = new() { Interval = 15 };
     private readonly WorkspaceStateStore _workspace;
     private readonly AutoHideController _autoHide;
+    private readonly SynchronizationContext _ui;
     private DesktopClickWatcher? _desktopClick;
     private StripWheelWatcher? _stripWheel;
     private AppSettings _settings;
@@ -62,6 +63,7 @@ internal sealed class StageCoordinator : IDisposable
 
     public StageCoordinator(SettingsStore settingsStore)
     {
+        _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _store = settingsStore;
         _settings = _store.Load();
         _workspace = new WorkspaceStateStore(
@@ -79,7 +81,12 @@ internal sealed class StageCoordinator : IDisposable
 
     public event Action<string>? StatusMessage;
 
+    public IReadOnlyList<MonitorDescriptor> Monitors => _monitors;
+
     private bool Suspended => _sessionPaused || _fullscreenPaused;
+
+    private IReadOnlyList<MonitorDescriptor> ManagedMonitors(AppSettings settings) =>
+        _monitors.Where(monitor => settings.IsManaged(monitor.Id)).ToArray();
 
     public void Start()
     {
@@ -90,7 +97,7 @@ internal sealed class StageCoordinator : IDisposable
 
         _started = true;
         _monitors = _display.GetMonitors();
-        foreach (var monitor in _monitors)
+        foreach (var monitor in ManagedMonitors(_settings))
         {
             CreateOverlay(monitor);
         }
@@ -163,17 +170,101 @@ internal sealed class StageCoordinator : IDisposable
 
     public void ApplySettings(AppSettings settings)
     {
+        var previous = _settings;
         var next = settings.Normalize();
-        if (_settings.AutoHide != next.AutoHide)
+        if (_monitors.Any(monitor => previous.AutoHideFor(monitor.Id) != next.AutoHideFor(monitor.Id)))
         {
             _visibleByMonitor.Clear();
+        }
+
+        var previousManaged = ManagedMonitors(previous)
+            .Select(monitor => monitor.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var nextManaged = ManagedMonitors(next)
+            .Select(monitor => monitor.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var managedChanged = !previousManaged.SetEquals(nextManaged);
+        if (managedChanged)
+        {
+            ExcludeMonitors(previousManaged.Except(nextManaged));
         }
 
         _settings = next;
         UpdateDesktopClickWatcher();
         _model.SetMode(_settings.WindowMode);
         _render.Post(new RenderCommand.SetPreviewFps(_settings.PreviewFps));
-        Reconcile();
+
+        if (managedChanged)
+        {
+            RecreateOverlays(loadWorkspace: false);
+        }
+        else
+        {
+            Reconcile();
+        }
+    }
+
+    private void ExcludeMonitors(IEnumerable<string> monitorIds)
+    {
+        var excluded = monitorIds.ToHashSet(StringComparer.Ordinal);
+        foreach (var monitorId in excluded)
+        {
+            var windows = _model.Windows.Values
+                .Where(snapshot => snapshot.MonitorId == monitorId)
+                .ToArray();
+            foreach (var id in windows
+                .Where(snapshot => _hiddenByApp.Contains(snapshot.Id))
+                .Select(snapshot => snapshot.Id))
+            {
+                WindowActivation.RestoreNoActivate(id);
+                _hiddenByApp.Remove(id);
+            }
+
+            foreach (var snapshot in windows)
+            {
+                _model.Remove(snapshot.Id);
+                _lastAspect.Remove(snapshot.Id);
+            }
+        }
+
+        if (_desktopShown && _desktopStage is not null)
+        {
+            foreach (var monitorId in excluded)
+            {
+                _desktopStage.Remove(monitorId);
+            }
+
+            if (_desktopStage.Count == 0)
+            {
+                _desktopShown = false;
+                _desktopForeground = null;
+            }
+            else
+            {
+                _desktopForeground = _desktopStage.Values
+                    .Select(state => state.Foreground)
+                    .FirstOrDefault(id => id is not null);
+            }
+        }
+
+        foreach (var monitorId in excluded)
+        {
+            _stripAreas.Remove(monitorId);
+            _visibleByMonitor.Remove(monitorId);
+            _scrollOffset.Remove(monitorId);
+            _scrollTarget.Remove(monitorId);
+            _maxScroll.Remove(monitorId);
+            _dpiByMonitor.Remove(monitorId);
+        }
+
+        if (_cycleMonitorId is { } cycleMonitor && excluded.Contains(cycleMonitor))
+        {
+            _cycle = null;
+            _cycleMonitorId = null;
+            _cycleReset.Stop();
+        }
+
+        ScheduleWorkspaceSave();
     }
 
     private void OnHideStripTick()
@@ -723,9 +814,9 @@ internal sealed class StageCoordinator : IDisposable
     private void OnDeviceLost() => RunOnUiThread(RecoverRenderThread);
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
-        RunOnUiThread(RecreateOverlays);
+        RunOnUiThread(() => RecreateOverlays());
 
-    private void RecreateOverlays()
+    private void RecreateOverlays(bool loadWorkspace = true)
     {
         if (_disposed)
         {
@@ -747,7 +838,7 @@ internal sealed class StageCoordinator : IDisposable
         _visibleByMonitor.Clear();
         _stripAreas.Clear();
         _monitors = _display.GetMonitors();
-        foreach (var monitor in _monitors)
+        foreach (var monitor in ManagedMonitors(_settings))
         {
             CreateOverlay(monitor);
         }
@@ -757,12 +848,24 @@ internal sealed class StageCoordinator : IDisposable
         _render.DeviceLost += OnDeviceLost;
         _fullscreenPaused = IsFullscreen(_source.GetForegroundWindow());
         StartRenderThread();
-        Rebuild();
+        if (loadWorkspace)
+        {
+            Rebuild();
+            return;
+        }
+
+        _stripHideReadyAt = Environment.TickCount64 + 1200;
+        Reconcile();
+        _hideStrip.Stop();
+        _hideStrip.Start();
     }
 
     private StripHitArea? GetStripArea(string monitorId)
     {
-        if (!_settings.AutoHide || !_settings.Enabled || Suspended)
+        if (!_settings.Enabled
+            || Suspended
+            || !_settings.IsManaged(monitorId)
+            || !_settings.AutoHideFor(monitorId))
         {
             return null;
         }
@@ -857,19 +960,18 @@ internal sealed class StageCoordinator : IDisposable
 
     private void RunOnUiThread(Action action)
     {
-        if (_overlays.Values.FirstOrDefault() is not { IsHandleCreated: true } overlay)
+        if (_disposed)
         {
             return;
         }
 
-        try
+        _ui.Post(_ =>
         {
-            overlay.BeginInvoke(action);
-        }
-        catch (Exception)
-        {
-            // The overlay can be gone while the app is shutting down.
-        }
+            if (!_disposed)
+            {
+                action();
+            }
+        }, null);
     }
 
     private bool IsFullscreen(WindowId? window) =>
@@ -935,7 +1037,7 @@ internal sealed class StageCoordinator : IDisposable
                 monitor.Bounds.Height * toDip,
                 (monitor.WorkArea.Top - monitor.Bounds.Top) * toDip,
                 monitor.WorkArea.Height * toDip,
-                _settings.StripEdge);
+                _settings.EdgeFor(monitor.Id));
             var layout = StripLayoutCalculator.Calculate(
                 items,
                 options,
@@ -949,7 +1051,7 @@ internal sealed class StageCoordinator : IDisposable
             var monitorWidth = monitor.Bounds.Width * toDip;
             var workTop = (monitor.WorkArea.Top - monitor.Bounds.Top) * toDip;
             var workHeight = monitor.WorkArea.Height * toDip;
-            var edgeX = _settings.StripEdge == StripEdge.Left
+            var edgeX = _settings.EdgeFor(monitor.Id) == StripEdge.Left
                 ? 0
                 : Math.Max(0, monitorWidth - AutoHideController.RevealEdgeDip);
             var edgeZone = new RectD(edgeX, workTop, AutoHideController.RevealEdgeDip, workHeight);
@@ -1022,7 +1124,7 @@ internal sealed class StageCoordinator : IDisposable
                 }
             }
 
-            var autoHideVisible = !_settings.AutoHide
+            var autoHideVisible = !_settings.AutoHideFor(monitor.Id)
                 || _visibleByMonitor.GetValueOrDefault(monitor.Id, true);
             var visible = _settings.Enabled
                 && !Suspended
@@ -1040,7 +1142,7 @@ internal sealed class StageCoordinator : IDisposable
 
     private void ActivateFromUia(string monitorId, WindowId window)
     {
-        if (_settings.AutoHide
+        if (_settings.AutoHideFor(monitorId)
             && _settings.Enabled
             && !Suspended
             && !_visibleByMonitor.GetValueOrDefault(monitorId, true))
@@ -1217,8 +1319,10 @@ internal sealed class StageCoordinator : IDisposable
 
     private IReadOnlyList<WindowSnapshot> Enumerate() =>
         _source.Enumerate(
-            _monitors,
-            new HashSet<string>(_settings.ExcludedAppIds, StringComparer.OrdinalIgnoreCase));
+                _monitors,
+                new HashSet<string>(_settings.ExcludedAppIds, StringComparer.OrdinalIgnoreCase))
+            .Where(snapshot => _settings.IsManaged(snapshot.MonitorId))
+            .ToArray();
 
     private string? MonitorUnderPointer()
     {

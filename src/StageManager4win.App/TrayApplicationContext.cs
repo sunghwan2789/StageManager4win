@@ -119,7 +119,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void ShowSettings()
     {
-        using var form = new SettingsForm(_settings);
+        using var form = new SettingsForm(_settings, _coordinator.Monitors);
         if (form.ShowDialog() != DialogResult.OK)
         {
             return;

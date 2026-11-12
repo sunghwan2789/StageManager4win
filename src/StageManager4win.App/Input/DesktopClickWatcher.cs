@@ -11,6 +11,7 @@ namespace StageManager4win.Input;
 internal sealed class DesktopClickWatcher : IDisposable
 {
     private readonly Func<Point, bool> _isOverlayPoint;
+    private readonly Func<Point, bool> _isManagedPoint;
     private readonly SynchronizationContext _context;
     private readonly HOOKPROC _callback;
     private UnhookWindowsHookExSafeHandle? _hook;
@@ -19,9 +20,12 @@ internal sealed class DesktopClickWatcher : IDisposable
     private bool _tracking;
     private bool _disposed;
 
-    public DesktopClickWatcher(Func<Point, bool> isOverlayPoint)
+    public DesktopClickWatcher(
+        Func<Point, bool> isOverlayPoint,
+        Func<Point, bool> isManagedPoint)
     {
         _isOverlayPoint = isOverlayPoint;
+        _isManagedPoint = isManagedPoint;
         _context = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _callback = OnMouse;
     }
@@ -143,7 +147,10 @@ internal sealed class DesktopClickWatcher : IDisposable
     {
         try
         {
-            return !_isOverlayPoint(point) && IsDesktopWindow(point) && !IsIconAt(point);
+            return _isManagedPoint(point)
+                && !_isOverlayPoint(point)
+                && IsDesktopWindow(point)
+                && !IsIconAt(point);
         }
         catch (Exception)
         {

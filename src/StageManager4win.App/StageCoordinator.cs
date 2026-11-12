@@ -112,7 +112,10 @@ internal sealed class StageCoordinator : IDisposable
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         _watcher.Raised += OnWindowEvent;
         _watcher.Start();
-        _desktopClick = new DesktopClickWatcher(IsOverStrip);
+        _desktopClick = new DesktopClickWatcher(
+            IsOverStrip,
+            point => MonitorTopology.IdAt(_monitors, point.X, point.Y) is { } id
+                && _settings.IsManaged(id));
         _desktopClick.WallpaperClicked += ShowDesktop;
         _stripWheel = new StripWheelWatcher(OnStripWheel);
         UpdateDesktopClickWatcher();
@@ -361,7 +364,7 @@ internal sealed class StageCoordinator : IDisposable
             _desktopStage = null;
             if (saved is not null)
             {
-                foreach (var state in saved.Values)
+                foreach (var state in saved.Values.Where(state => _settings.IsManaged(state.MonitorId)))
                 {
                     var stage = state.Stage.Where(_model.Windows.ContainsKey).ToList();
                     _model.Restore(state with { Stage = stage });
@@ -385,7 +388,7 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         var hidden = new Dictionary<string, MonitorState>(StringComparer.Ordinal);
-        foreach (var state in _model.Monitors.Values)
+        foreach (var state in _model.Monitors.Values.Where(state => _settings.IsManaged(state.MonitorId)))
         {
             hidden[state.MonitorId] = state;
         }
@@ -974,8 +977,18 @@ internal sealed class StageCoordinator : IDisposable
         }, null);
     }
 
-    private bool IsFullscreen(WindowId? window) =>
-        window is { } value && _source.IsFullscreen((nint)value.Value);
+    private bool IsFullscreen(WindowId? window)
+    {
+        if (window is not { } value || !_source.IsFullscreen((nint)value.Value))
+        {
+            return false;
+        }
+
+        var monitorId = MonitorTopology.IdForBounds(
+            _monitors,
+            _source.GetBounds((nint)value.Value));
+        return monitorId is not null && _settings.IsManaged(monitorId);
+    }
 
     private void Refresh()
     {
@@ -1329,16 +1342,17 @@ internal sealed class StageCoordinator : IDisposable
         var position = Cursor.Position;
         if (MonitorTopology.IdAt(_monitors, position.X, position.Y) is { } monitorId)
         {
-            return monitorId;
+            return _settings.IsManaged(monitorId) ? monitorId : null;
         }
 
         if (_source.GetForegroundWindow() is { } foreground
-            && _model.Windows.TryGetValue(foreground, out var snapshot))
+            && _model.Windows.TryGetValue(foreground, out var snapshot)
+            && _settings.IsManaged(snapshot.MonitorId))
         {
             return snapshot.MonitorId;
         }
 
-        return _monitors.Count > 0 ? _monitors[0].Id : null;
+        return ManagedMonitors(_settings).FirstOrDefault()?.Id;
     }
 
     private static uint ToBgra(Color color) =>

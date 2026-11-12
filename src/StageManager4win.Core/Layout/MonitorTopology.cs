@@ -19,6 +19,18 @@ public static class MonitorTopology
         return null;
     }
 
+    public static string? IdForWindow(
+        IReadOnlyList<MonitorDescriptor> monitors,
+        WindowBounds bounds,
+        WindowBounds restoreBounds,
+        bool minimized)
+    {
+        var target = minimized && restoreBounds.Width > 0 && restoreBounds.Height > 0
+            ? restoreBounds
+            : bounds;
+        return IdForBounds(monitors, target);
+    }
+
     public static string? IdForBounds(IReadOnlyList<MonitorDescriptor> monitors, WindowBounds bounds)
     {
         if (monitors.Count == 0)

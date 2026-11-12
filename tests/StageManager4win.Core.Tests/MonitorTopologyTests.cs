@@ -44,4 +44,34 @@ public class MonitorTopologyTests
     {
         Assert.Null(MonitorTopology.IdForBounds(Array.Empty<MonitorDescriptor>(), new WindowBounds(0, 0, 10, 10)));
     }
+
+    [Fact]
+    public void IdForWindow_MinimizedUsesRestoreBounds()
+    {
+        var bounds = new WindowBounds(50, 50, 200, 200);
+        var restore = new WindowBounds(1050, 50, 200, 200);
+
+        Assert.Equal("M2", MonitorTopology.IdForWindow(
+            new[] { Left, Right }, bounds, restore, minimized: true));
+    }
+
+    [Fact]
+    public void IdForWindow_NormalUsesCurrentBounds()
+    {
+        var bounds = new WindowBounds(50, 50, 200, 200);
+        var restore = new WindowBounds(1050, 50, 200, 200);
+
+        Assert.Equal("M1", MonitorTopology.IdForWindow(
+            new[] { Left, Right }, bounds, restore, minimized: false));
+    }
+
+    [Fact]
+    public void IdForWindow_EmptyList_ReturnsNull()
+    {
+        Assert.Null(MonitorTopology.IdForWindow(
+            Array.Empty<MonitorDescriptor>(),
+            new WindowBounds(0, 0, 10, 10),
+            new WindowBounds(0, 0, 10, 10),
+            minimized: false));
+    }
 }

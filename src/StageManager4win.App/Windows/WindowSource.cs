@@ -25,6 +25,7 @@ internal sealed class WindowSource
         var hwnd = new HWND(handle);
         var processId = GetProcessId(hwnd);
         var bounds = GetBounds(hwnd);
+        var minimized = PInvoke.IsIconic(hwnd);
         var cloaked = IsCloaked(hwnd);
         var fullscreen = IsFullscreen(handle);
         var traits = new WindowTraits(
@@ -45,7 +46,8 @@ internal sealed class WindowSource
             return null;
         }
 
-        var monitorId = MonitorTopology.IdForBounds(monitors, bounds);
+        var restoreBounds = minimized ? GetRestoreBounds(handle) : bounds;
+        var monitorId = MonitorTopology.IdForWindow(monitors, bounds, restoreBounds, minimized);
         if (monitorId is null)
         {
             return null;
@@ -62,7 +64,7 @@ internal sealed class WindowSource
             bounds,
             monitorId,
             traits.IsVisible,
-            PInvoke.IsIconic(hwnd),
+            minimized,
             cloaked,
             fullscreen);
     }

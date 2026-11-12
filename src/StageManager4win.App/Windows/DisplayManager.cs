@@ -27,8 +27,27 @@ internal sealed class DisplayManager
 
             var bounds = ToBounds(info.monitorInfo.rcMonitor);
             var workArea = ToBounds(info.monitorInfo.rcWork);
-            var device = info.szDevice.ToString();
-            monitors.Add(new MonitorDescriptor(device, bounds, workArea, dpiX));
+            var deviceName = info.szDevice.ToString();
+
+            var device = new DISPLAY_DEVICEW { cb = (uint)sizeof(DISPLAY_DEVICEW) };
+            var name = string.Empty;
+            var id = deviceName;
+            if (PInvoke.EnumDisplayDevices(
+                    deviceName, 0, ref device, PInvoke.EDD_GET_DEVICE_INTERFACE_NAME))
+            {
+                name = device.DeviceString.ToString();
+                id = MonitorKey.FromDeviceId(device.DeviceID.ToString(), deviceName);
+            }
+
+            var isPrimary = (info.monitorInfo.dwFlags & PInvoke.MONITORINFOF_PRIMARY) != 0;
+            monitors.Add(new MonitorDescriptor(
+                id,
+                bounds,
+                workArea,
+                dpiX,
+                GdiDeviceName: deviceName,
+                Name: name,
+                IsPrimary: isPrimary));
             return true;
         });
 

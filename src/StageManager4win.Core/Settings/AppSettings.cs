@@ -12,6 +12,8 @@ public sealed record AppSettings
     public int PreviewFps { get; init; } = 30;
     public HotkeySettings Hotkeys { get; init; } = HotkeySettings.Default;
     public IReadOnlyList<string> ExcludedAppIds { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<MonitorSettings> Monitors { get; init; }
+        = Array.Empty<MonitorSettings>();
 
     public AppSettings Normalize() => this with
     {
@@ -22,8 +24,52 @@ public sealed record AppSettings
         ExcludedAppIds = (ExcludedAppIds ?? Array.Empty<string>())
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Select(id => id.Trim())
-            .ToArray()
+            .ToArray(),
+        Monitors = NormalizeMonitors(Monitors)
     };
+
+    public MonitorSettings? ForMonitor(string monitorId) =>
+        Monitors.FirstOrDefault(entry =>
+            string.Equals(entry.MonitorId, monitorId, StringComparison.OrdinalIgnoreCase));
+
+    public bool IsManaged(string monitorId) => ForMonitor(monitorId)?.Managed ?? true;
+
+    public StripEdges EdgeFor(string monitorId) =>
+        ForMonitor(monitorId)?.StripEdge ?? StripEdge;
+
+    public bool AutoHideFor(string monitorId) =>
+        ForMonitor(monitorId)?.AutoHide ?? AutoHide;
+
+    private static MonitorSettings[] NormalizeMonitors(
+        IReadOnlyList<MonitorSettings>? monitors)
+    {
+        var result = new List<MonitorSettings>();
+        var indexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in monitors ?? Array.Empty<MonitorSettings>())
+        {
+            if (entry is null || string.IsNullOrWhiteSpace(entry.MonitorId))
+            {
+                continue;
+            }
+
+            var normalized = entry with
+            {
+                MonitorId = entry.MonitorId.Trim(),
+                StripEdge = entry.StripEdge is { } edge && Enum.IsDefined(edge) ? edge : null
+            };
+            if (indexes.TryGetValue(normalized.MonitorId, out var index))
+            {
+                result[index] = normalized;
+            }
+            else
+            {
+                indexes[normalized.MonitorId] = result.Count;
+                result.Add(normalized);
+            }
+        }
+
+        return result.ToArray();
+    }
 
     private static int NormalizeFps(int fps)
     {

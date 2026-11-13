@@ -724,7 +724,10 @@ internal sealed class StageCoordinator : IDisposable
         {
             _model.Remove(id);
             _lastAspect.Remove(id);
-            _hiddenByApp.Remove(id);
+            if (_hiddenByApp.Remove(id))
+            {
+                WindowActivation.RestoreNoActivate(id);
+            }
         }
 
         foreach (var snapshot in snapshots)
@@ -968,13 +971,20 @@ internal sealed class StageCoordinator : IDisposable
             return;
         }
 
-        _ui.Post(_ =>
+        try
         {
-            if (!_disposed)
+            _ui.Post(_ =>
             {
-                action();
-            }
-        }, null);
+                if (!_disposed)
+                {
+                    action();
+                }
+            }, null);
+        }
+        catch (Exception)
+        {
+            // The UI thread can be gone while the app is shutting down.
+        }
     }
 
     private bool IsFullscreen(WindowId? window)
@@ -1352,7 +1362,7 @@ internal sealed class StageCoordinator : IDisposable
             return snapshot.MonitorId;
         }
 
-        return ManagedMonitors(_settings).FirstOrDefault()?.Id;
+        return null;
     }
 
     private static uint ToBgra(Color color) =>

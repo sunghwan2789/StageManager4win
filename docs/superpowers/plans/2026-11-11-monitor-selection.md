@@ -712,13 +712,19 @@ Record the actual results in the task report. If any check fails, fix it and rep
 - v2 smoke: clicking a tile staged a Paint window; dragging a staged window
   onto a tile returned it to the strip (stage 1→0); quitting restored every
   minimized window.
-- Session lock/unlock was not exercised: SSH has no interactive account
-  credentials. Treat it as a manual check.
+- Session switch (2026-11-13): posting `WM_WTSSESSION_CHANGE` with
+  `WTS_SESSION_LOCK` and then `WTS_SESSION_UNLOCK` to the app's
+  `.NET-BroadcastEventWindow` hid the strip (`kind=3` → `kind=1`) and restored
+  it (`kind=1` → `kind=3`). The app stayed alive, and settings, workspace, and
+  window states were unchanged. The real lock screen was not entered, so
+  unlock credentials were never exercised.
 - Multi-monitor behavior remains unverified (single-display VM).
 
 - [x] **Step 4: Commit fixes only if any were needed**
 
-No fixes were needed; there is no verification commit.
+The verification run needed no fix. The final review produced two later
+commits: `a124dbf` (restore windows dropped by `Reconcile`) and `04e7480`
+(align pointer scope with the spec).
 
 ```bash
 git add -A

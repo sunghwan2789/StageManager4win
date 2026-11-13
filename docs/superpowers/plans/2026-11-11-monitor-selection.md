@@ -516,10 +516,10 @@ if (_source.GetForegroundWindow() is { } foreground
 {
     return snapshot.MonitorId;
 }
-return ManagedMonitors(_settings).FirstOrDefault()?.Id;
+return null;
 ```
 
-Toggle and cycle keep their existing null checks, so they no-op over an unmanaged monitor.
+Toggle and cycle keep their existing null checks, so they no-op over an unmanaged monitor. A pointer gap with an unmanaged foreground is also a no-op, matching the spec.
 
 - [ ] **Step 2: Filter show desktop by managed monitors**
 

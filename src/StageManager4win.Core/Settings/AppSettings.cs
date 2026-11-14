@@ -7,7 +7,6 @@ public sealed record AppSettings
 {
     public bool Enabled { get; init; } = true;
     public WindowModes WindowMode { get; init; } = WindowModes.OneAtATime;
-    public bool AutoHide { get; init; }
     public StripEdges StripEdge { get; init; } = StripEdges.Left;
     public int PreviewFps { get; init; } = 30;
     public HotkeySettings Hotkeys { get; init; } = HotkeySettings.Default;
@@ -36,9 +35,6 @@ public sealed record AppSettings
 
     public StripEdges EdgeFor(string monitorId) =>
         ForMonitor(monitorId)?.StripEdge ?? StripEdge;
-
-    public bool AutoHideFor(string monitorId) =>
-        ForMonitor(monitorId)?.AutoHide ?? AutoHide;
 
     private static MonitorSettings[] NormalizeMonitors(
         IReadOnlyList<MonitorSettings>? monitors)

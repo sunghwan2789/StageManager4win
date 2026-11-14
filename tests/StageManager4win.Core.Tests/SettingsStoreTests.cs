@@ -35,10 +35,9 @@ public sealed class SettingsStoreTests : IDisposable
         {
             Enabled = false,
             WindowMode = WindowMode.AllAtOnce,
-            AutoHide = true,
             StripEdge = StripEdge.Right,
             PreviewFps = 60,
-            Hotkeys = new HotkeySettings(new(3, 0x41), new(3, 0x42), new(3, 0x43), new(3, 0x44)),
+            Hotkeys = new HotkeySettings(new(3, 0x42), new(3, 0x43), new(3, 0x44)),
             ExcludedAppIds = new[] { "app.one", "app.two" }
         };
 
@@ -47,7 +46,6 @@ public sealed class SettingsStoreTests : IDisposable
 
         Assert.Equal(settings.Enabled, loaded.Enabled);
         Assert.Equal(settings.WindowMode, loaded.WindowMode);
-        Assert.Equal(settings.AutoHide, loaded.AutoHide);
         Assert.Equal(settings.StripEdge, loaded.StripEdge);
         Assert.Equal(settings.PreviewFps, loaded.PreviewFps);
         Assert.Equal(settings.Hotkeys, loaded.Hotkeys);
@@ -97,7 +95,7 @@ public sealed class SettingsStoreTests : IDisposable
             Monitors = new[]
             {
                 new MonitorSettings(@"\\?\DISPLAY#ONE", Managed: false),
-                new MonitorSettings(@"\\?\DISPLAY#TWO", StripEdge: StripEdge.Right, AutoHide: true)
+                new MonitorSettings(@"\\?\DISPLAY#TWO", StripEdge: StripEdge.Right)
             }
         };
 
@@ -140,10 +138,9 @@ public sealed class SettingsStoreTests : IDisposable
         var settings = new AppSettings
         {
             StripEdge = StripEdge.Left,
-            AutoHide = false,
             Monitors = new[]
             {
-                new MonitorSettings("A", Managed: false, StripEdge: StripEdge.Right, AutoHide: true),
+                new MonitorSettings("A", Managed: false, StripEdge: StripEdge.Right),
                 new MonitorSettings("B")
             }
         };
@@ -152,8 +149,35 @@ public sealed class SettingsStoreTests : IDisposable
         Assert.True(settings.IsManaged("missing"));
         Assert.Equal(StripEdge.Right, settings.EdgeFor("A"));
         Assert.Equal(StripEdge.Left, settings.EdgeFor("missing"));
-        Assert.True(settings.AutoHideFor("A"));
-        Assert.False(settings.AutoHideFor("missing"));
         Assert.Null(settings.ForMonitor("missing"));
+    }
+
+    [Fact]
+    public void Load_LegacyAutoHideAndToggleKeys_IgnoresThem()
+    {
+        var store = new SettingsStore(_dir);
+        File.WriteAllText(store.FilePath, """
+            {
+              "enabled": false,
+              "autoHide": true,
+              "hotkeys": {
+                "toggle": { "modifiers": 3, "virtualKey": 32 },
+                "next": { "modifiers": 3, "virtualKey": 66 },
+                "previous": { "modifiers": 3, "virtualKey": 67 },
+                "showDesktop": { "modifiers": 3, "virtualKey": 68 }
+              },
+              "monitors": [
+                { "monitorId": "M", "autoHide": true }
+              ]
+            }
+            """);
+
+        var loaded = store.Load();
+
+        Assert.False(loaded.Enabled);
+        Assert.Equal(
+            new HotkeySettings(new(3, 0x42), new(3, 0x43), new(3, 0x44)),
+            loaded.Hotkeys);
+        Assert.Equal(new[] { new MonitorSettings("M") }, loaded.Monitors);
     }
 }

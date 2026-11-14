@@ -1,9 +1,14 @@
-using StageManager4win.Core.Windows;
+using StageManager4win.Core.Stages;
 
 namespace StageManager4win.Core.Layout;
 
 public static class StripLayoutCalculator
 {
+    private const double BadgeSizeDip = 28;
+    private const double BadgeGapDip = 4;
+    private const double BadgeOverlapDip = 4;
+    private const double BadgeInsetDip = 6;
+
     public static StripLayout Calculate(
         IReadOnlyList<StripItem> items,
         StripLayoutOptions options,
@@ -19,20 +24,24 @@ public static class StripLayoutCalculator
             stripWidth,
             options.WorkAreaHeight);
 
-        var sizes = new List<(WindowId Window, double Width, double Height)>(items.Count);
+        var sizes = new List<(StripItem Item, double CardWidth, double CardHeight, double UnionWidth, int Count)>(items.Count);
         var contentHeight = 0.0;
         for (var index = 0; index < items.Count; index++)
         {
-            var aspect = NormalizeAspect(items[index].AspectRatio);
-            var width = Math.Min(options.MaxTileWidth, options.MaxTileHeight * aspect);
-            var height = width / aspect;
+            var item = items[index];
+            var aspect = NormalizeAspect(item.AspectRatio);
+            var cardWidth = Math.Min(options.MaxTileWidth, options.MaxTileHeight * aspect);
+            var cardHeight = cardWidth / aspect;
+            var members = item.Members ?? Array.Empty<WindowKey>();
+            var count = Math.Max(1, members.Count);
+            var unionWidth = cardWidth + (count - 1) * TileStack.Step(count, cardWidth);
             if (index > 0)
             {
                 contentHeight += options.Gap;
             }
 
-            contentHeight += height;
-            sizes.Add((items[index].Window, width, height));
+            contentHeight += cardHeight;
+            sizes.Add((item, cardWidth, cardHeight, unionWidth, count));
         }
 
         // Scrolling moves the whole column; content that fits stays centered and
@@ -45,20 +54,69 @@ public static class StripLayoutCalculator
             : options.WorkAreaTop + (options.WorkAreaHeight - contentHeight) / 2;
 
         var tiles = new List<TilePlacement>(sizes.Count);
-        foreach (var (window, width, height) in sizes)
+        foreach (var (item, cardWidth, cardHeight, unionWidth, count) in sizes)
         {
-            if (y < viewBottom && y + height > options.WorkAreaTop)
+            if (y < viewBottom && y + cardHeight > options.WorkAreaTop)
             {
+                var centered = (stripWidth - unionWidth) / 2;
                 var x = options.Edge == StripEdge.Left
-                    ? (stripWidth - width) / 2
-                    : options.MonitorWidth - stripWidth + (stripWidth - width) / 2;
-                tiles.Add(new TilePlacement(window, new RectD(x, y, width, height)));
+                    ? Math.Max(0, centered)
+                    : Math.Min(
+                        options.MonitorWidth - unionWidth,
+                        options.MonitorWidth - stripWidth + centered);
+                var middleY = y + cardHeight / 2;
+                var union = TileStack.UnionBounds(count, cardWidth, cardHeight, x, middleY);
+                var members = item.Members ?? Array.Empty<WindowKey>();
+                var cards = new List<CardPlacement>(members.Count);
+                for (var index = 0; index < members.Count; index++)
+                {
+                    cards.Add(new CardPlacement(
+                        members[index],
+                        TileStack.CardBounds(
+                            index,
+                            count,
+                            cardWidth,
+                            cardHeight,
+                            x,
+                            middleY,
+                            options.Edge),
+                        index,
+                        TileStack.Scale(index, count)));
+                }
+
+                var badge = BadgeBounds(union, Math.Max(1, item.AppCount), options.Edge);
+                tiles.Add(new TilePlacement(
+                    item.SetId,
+                    union,
+                    cards,
+                    badge,
+                    TileStack.HitBounds(union)));
             }
 
-            y += height + options.Gap;
+            y += cardHeight + options.Gap;
         }
 
         return new StripLayout(tiles, stripBounds, contentHeight, maxScroll);
+    }
+
+    private static RectD BadgeBounds(RectD union, int appCount, StripEdge edge)
+    {
+        var slots = Math.Min(4, appCount);
+        if (appCount >= 5)
+        {
+            slots++;
+        }
+
+        var spacedWidth = slots * BadgeSizeDip + (slots - 1) * BadgeGapDip;
+        var maxWidth = Math.Max(BadgeSizeDip, union.Width - BadgeInsetDip * 2);
+        var width = spacedWidth <= maxWidth
+            ? spacedWidth
+            : BadgeSizeDip + (slots - 1) * (BadgeSizeDip - BadgeOverlapDip);
+        var bottom = union.Y + union.Height - BadgeInsetDip;
+        var x = edge == StripEdge.Left
+            ? union.X + BadgeInsetDip
+            : union.X + union.Width - BadgeInsetDip - width;
+        return new RectD(x, bottom - BadgeSizeDip, width, BadgeSizeDip);
     }
 
     private static double NormalizeAspect(double aspect)

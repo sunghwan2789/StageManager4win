@@ -1,5 +1,12 @@
-using StageManager4win.Core.Windows;
+using StageManager4win.Core.Stages;
 
 namespace StageManager4win.Core.Layout;
 
-public readonly record struct StripItem(WindowId Window, double AspectRatio);
+public readonly record struct StripItem(
+    string SetId,
+    IReadOnlyList<WindowKey> Members,
+    int AppCount,
+    double AspectRatio)
+{
+    public int MemberCount => Members.Count;
+}

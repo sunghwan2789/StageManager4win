@@ -2,7 +2,9 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using StageManager4win.Capture;
 using StageManager4win.Core.Diagnostics;
+using StageManager4win.Core.Stages;
 using StageManager4win.Interop;
+using StageManager4win.Overlay;
 
 namespace StageManager4win.Rendering;
 
@@ -10,8 +12,8 @@ internal sealed class RenderThread : IDisposable
 {
     private readonly BlockingCollection<RenderCommand> _commands = new();
     private readonly Dictionary<string, OverlayTarget> _targets = new();
-    private readonly Dictionary<string, IReadOnlyList<TileVisual>> _tilesByMonitor = new();
-    private readonly Dictionary<string, bool> _visibleByMonitor = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<SetTileVisual>> _setsByMonitor = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, OverlayPresentation> _presentationByMonitor = new(StringComparer.Ordinal);
     private readonly Thread _thread;
     private RenderDevice? _device;
     private CaptureManager? _capture;
@@ -232,8 +234,8 @@ internal sealed class RenderThread : IDisposable
         }
 
         _targets.Clear();
-        _tilesByMonitor.Clear();
-        _visibleByMonitor.Clear();
+        _setsByMonitor.Clear();
+        _presentationByMonitor.Clear();
         try
         {
             _device?.Dispose();
@@ -261,17 +263,21 @@ internal sealed class RenderThread : IDisposable
                     create.Hwnd,
                     create.MonitorId,
                     create.Dpi);
-                _tilesByMonitor.Remove(create.MonitorId);
-                _visibleByMonitor.Remove(create.MonitorId);
+                _setsByMonitor.Remove(create.MonitorId);
+                _presentationByMonitor.Remove(create.MonitorId);
                 SyncCaptureRequests();
                 dirty = true;
                 break;
             case RenderCommand.UpdateOverlay update:
                 if (_targets.TryGetValue(update.MonitorId, out var target))
                 {
-                    target.Update(update.Tiles, update.Visible, update.ClipDip);
-                    _tilesByMonitor[update.MonitorId] = update.Tiles;
-                    _visibleByMonitor[update.MonitorId] = update.Visible;
+                    target.Update(
+                        update.Sets,
+                        update.Placements,
+                        update.Presentation,
+                        update.ClipDip);
+                    _setsByMonitor[update.MonitorId] = update.Sets;
+                    _presentationByMonitor[update.MonitorId] = update.Presentation;
                     SyncCaptureRequests();
                     dirty = true;
                 }
@@ -280,7 +286,7 @@ internal sealed class RenderThread : IDisposable
             case RenderCommand.SetOverlayHover hover:
                 if (_targets.TryGetValue(hover.MonitorId, out var hovered))
                 {
-                    hovered.SetHover(hover.Window);
+                    hovered.SetHover(hover.Target);
                     dirty = true;
                 }
 
@@ -288,7 +294,7 @@ internal sealed class RenderThread : IDisposable
             case RenderCommand.UpdateDragGhost ghost:
                 if (_targets.TryGetValue(ghost.MonitorId, out var dragged))
                 {
-                    dragged.SetGhost(ghost.Window, ghost.DeltaX, ghost.DeltaY);
+                    dragged.SetGhost(ghost.SetId, ghost.DeltaX, ghost.DeltaY);
                     dirty = true;
                 }
 
@@ -306,8 +312,8 @@ internal sealed class RenderThread : IDisposable
                     dirty = true;
                 }
 
-                _tilesByMonitor.Remove(remove.MonitorId);
-                _visibleByMonitor.Remove(remove.MonitorId);
+                _setsByMonitor.Remove(remove.MonitorId);
+                _presentationByMonitor.Remove(remove.MonitorId);
                 SyncCaptureRequests();
                 break;
             case RenderCommand.StopRenderThread:
@@ -325,19 +331,29 @@ internal sealed class RenderThread : IDisposable
         }
 
         var requests = new List<CaptureRequest>();
-        foreach (var (monitorId, tiles) in _tilesByMonitor)
+        var seen = new HashSet<WindowKey>();
+        foreach (var (monitorId, sets) in _setsByMonitor)
         {
-            // Hidden strips must not keep capture sessions alive.
-            if (!_visibleByMonitor.GetValueOrDefault(monitorId))
+            // Hidden and occluded strips must not keep capture sessions alive.
+            if (_presentationByMonitor.GetValueOrDefault(monitorId)
+                is OverlayPresentation.Hidden or OverlayPresentation.Occluded)
             {
                 continue;
             }
 
-            foreach (var tile in tiles)
+            foreach (var set in sets)
             {
-                if (tile.SourceHwnd != 0)
+                foreach (var card in set.Cards.OrderBy(card => card.StackIndex))
                 {
-                    requests.Add(new CaptureRequest(tile.Window, tile.SourceHwnd));
+                    if (card.StackIndex > 2
+                        || card.IsMinimized
+                        || card.SourceHwnd == 0
+                        || !seen.Add(card.Window))
+                    {
+                        continue;
+                    }
+
+                    requests.Add(new CaptureRequest(card.Window.Window, card.SourceHwnd));
                 }
             }
         }

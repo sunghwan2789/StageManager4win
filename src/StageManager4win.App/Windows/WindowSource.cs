@@ -121,6 +121,33 @@ internal sealed class WindowSource
 
     public WindowBounds GetBounds(nint handle) => GetBounds(new HWND(handle));
 
+    public unsafe WindowBounds GetExtendedFrameBounds(nint handle)
+    {
+        RECT rect;
+        return PInvoke.DwmGetWindowAttribute(
+            new HWND(handle),
+            DWMWINDOWATTRIBUTE.DWMWA_EXTENDED_FRAME_BOUNDS,
+            &rect,
+            (uint)sizeof(RECT)).Succeeded
+            ? ToBounds(rect)
+            : GetBounds(handle);
+    }
+
+    public bool CanQueryProcess(int processId)
+    {
+        var process = PInvoke.OpenProcess(
+            PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            (uint)processId);
+        if (process.IsNull)
+        {
+            return false;
+        }
+
+        PInvoke.CloseHandle(process);
+        return true;
+    }
+
     public WindowBounds GetRestoreBounds(nint handle)
     {
         var placement = new WINDOWPLACEMENT
@@ -133,6 +160,8 @@ internal sealed class WindowSource
     }
 
     public bool IsVisible(nint handle) => PInvoke.IsWindowVisible(new HWND(handle));
+
+    public bool IsMaximized(nint handle) => PInvoke.IsZoomed(new HWND(handle));
 
     private static uint GetProcessId(HWND hwnd)
     {

@@ -33,7 +33,19 @@ public static class WorkspaceRestore
             }
         }
 
-        var strip = candidates.Where(id => !staged.Contains(id)).ToList();
+        var remaining = candidates.Where(id => !staged.Contains(id)).ToList();
+        var strip = new List<WindowId>();
+        var usedStrip = new HashSet<WindowId>();
+        foreach (var identity in saved.StripOrder)
+        {
+            if (Find(remaining, identity, windows, usedStrip) is { } id)
+            {
+                strip.Add(id);
+                usedStrip.Add(id);
+            }
+        }
+
+        strip.AddRange(remaining.Where(id => !usedStrip.Contains(id)));
         var foreground = saved.Foreground is { } foregroundIdentity
             ? Find(candidates, foregroundIdentity, windows, null)
             : null;

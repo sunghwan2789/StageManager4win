@@ -22,7 +22,6 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _coordinator = new StageCoordinator(store);
         _hotkeys = new HotkeyManager();
-        _hotkeys.ToggleRequested += () => _coordinator.ToggleStripUnderPointer();
         _hotkeys.NextRequested += () => _coordinator.Cycle(1);
         _hotkeys.PreviousRequested += () => _coordinator.Cycle(-1);
         _hotkeys.ShowDesktopRequested += () => _coordinator.ShowDesktop();

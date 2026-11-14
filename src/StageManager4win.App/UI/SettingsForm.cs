@@ -33,12 +33,12 @@ public sealed class SettingsForm : Form
         var monitorRows = new List<MonitorRow>();
         var monitorsPanel = new TableLayoutPanel
         {
-            ColumnCount = 4,
+            ColumnCount = 3,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Dock = DockStyle.Fill
         };
-        for (var column = 0; column < 4; column++)
+        for (var column = 0; column < 3; column++)
         {
             monitorsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         }
@@ -46,7 +46,6 @@ public sealed class SettingsForm : Form
         monitorsPanel.Controls.Add(new Label { Text = "Monitor", AutoSize = true }, 0, 0);
         monitorsPanel.Controls.Add(new Label { Text = "Managed", AutoSize = true }, 1, 0);
         monitorsPanel.Controls.Add(new Label { Text = "Strip edge", AutoSize = true }, 2, 0);
-        monitorsPanel.Controls.Add(new Label { Text = "Auto-hide", AutoSize = true }, 3, 0);
         for (var index = 0; index < monitors.Count; index++)
         {
             var monitor = monitors[index];
@@ -64,19 +63,6 @@ public sealed class SettingsForm : Form
                 StripEdge.Right => 2,
                 _ => 0
             };
-            var monitorAutoHide = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 110
-            };
-            monitorAutoHide.Items.AddRange(new object[] { "Use global", "On", "Off" });
-            monitorAutoHide.SelectedIndex = existing?.AutoHide switch
-            {
-                true => 1,
-                false => 2,
-                _ => 0
-            };
-
             var line = index + 1;
             monitorsPanel.Controls.Add(
                 new Label
@@ -89,15 +75,13 @@ public sealed class SettingsForm : Form
                 line);
             monitorsPanel.Controls.Add(managed, 1, line);
             monitorsPanel.Controls.Add(monitorEdge, 2, line);
-            monitorsPanel.Controls.Add(monitorAutoHide, 3, line);
-            monitorRows.Add(new MonitorRow(monitor.Id, managed, monitorEdge, monitorAutoHide));
+            monitorRows.Add(new MonitorRow(monitor.Id, managed, monitorEdge));
         }
 
         var enabled = new CheckBox { Text = "Enabled", Checked = settings.Enabled, AutoSize = true };
         var mode = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
         mode.Items.AddRange(new object[] { "One at a Time", "All at Once", "Automatic" });
         mode.SelectedIndex = (int)settings.WindowMode;
-        var autoHide = new CheckBox { Text = "Auto-hide", Checked = settings.AutoHide, AutoSize = true };
         var edge = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
         edge.Items.AddRange(new object[] { "Left", "Right" });
         edge.SelectedIndex = (int)settings.StripEdge;
@@ -118,7 +102,6 @@ public sealed class SettingsForm : Form
             Text = string.Join(Environment.NewLine, settings.ExcludedAppIds)
         };
 
-        var toggle = NewHotkeyBox(settings.Hotkeys.Toggle);
         var next = NewHotkeyBox(settings.Hotkeys.Next);
         var previous = NewHotkeyBox(settings.Hotkeys.Previous);
         var showDesktop = NewHotkeyBox(settings.Hotkeys.ShowDesktop);
@@ -133,11 +116,9 @@ public sealed class SettingsForm : Form
         row++;
         AddRow(layout, "Enabled", enabled, row++);
         AddRow(layout, "Window mode", mode, row++);
-        AddRow(layout, "Auto-hide", autoHide, row++);
         AddRow(layout, "Strip edge", edge, row++);
         AddRow(layout, "Preview FPS", fps, row++);
         AddRow(layout, "Excluded app IDs (one per line)", excluded, row++);
-        AddRow(layout, "Toggle hotkey", toggle, row++);
         AddRow(layout, "Next hotkey", next, row++);
         AddRow(layout, "Previous hotkey", previous, row++);
         AddRow(layout, "Show desktop hotkey", showDesktop, row++);
@@ -157,8 +138,8 @@ public sealed class SettingsForm : Form
 
         ok.Click += (_, _) =>
         {
-            Result = BuildResult(settings, monitorRows, enabled, mode, autoHide, edge, fps,
-                excluded, toggle, next, previous, showDesktop);
+            Result = BuildResult(settings, monitorRows, enabled, mode, edge, fps,
+                excluded, next, previous, showDesktop);
             DialogResult = DialogResult.OK;
         };
 
@@ -187,22 +168,18 @@ public sealed class SettingsForm : Form
         IReadOnlyList<MonitorRow> monitorRows,
         CheckBox enabled,
         ComboBox mode,
-        CheckBox autoHide,
         ComboBox edge,
         ComboBox fps,
         TextBox excluded,
-        HotkeyTextBox toggle,
         HotkeyTextBox next,
         HotkeyTextBox previous,
         HotkeyTextBox showDesktop) => original with
         {
             Enabled = enabled.Checked,
             WindowMode = (WindowMode)mode.SelectedIndex,
-            AutoHide = autoHide.Checked,
             StripEdge = (StripEdge)edge.SelectedIndex,
             PreviewFps = (int)(fps.SelectedItem ?? 30),
             Hotkeys = new HotkeySettings(
-                BindingOf(toggle, original.Hotkeys.Toggle),
                 BindingOf(next, original.Hotkeys.Next),
                 BindingOf(previous, original.Hotkeys.Previous),
                 BindingOf(showDesktop, original.Hotkeys.ShowDesktop)),
@@ -246,18 +223,12 @@ public sealed class SettingsForm : Form
                 2 => StripEdge.Right,
                 _ => (StripEdge?)null
             };
-            var autoHide = row.AutoHide.SelectedIndex switch
-            {
-                1 => true,
-                2 => false,
-                _ => (bool?)null
-            };
-            if (managed && edge is null && autoHide is null)
+            if (managed && edge is null)
             {
                 continue;
             }
 
-            monitors.Add(new MonitorSettings(row.MonitorId, managed, edge, autoHide));
+            monitors.Add(new MonitorSettings(row.MonitorId, managed, edge));
         }
 
         return monitors;
@@ -266,8 +237,7 @@ public sealed class SettingsForm : Form
     private sealed record MonitorRow(
         string MonitorId,
         CheckBox Managed,
-        ComboBox Edge,
-        ComboBox AutoHide);
+        ComboBox Edge);
 
     private static HotkeyBinding BindingOf(HotkeyTextBox box, HotkeyBinding fallback) =>
         box.Tag as HotkeyBinding ?? fallback;

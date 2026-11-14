@@ -1,4 +1,5 @@
-using StageManager4win.Core.Windows;
+using StageManager4win.Core.Layout;
+using StageManager4win.Overlay;
 
 namespace StageManager4win.Rendering;
 
@@ -8,15 +9,16 @@ internal abstract record RenderCommand
 
     internal sealed record UpdateOverlay(
         string MonitorId,
-        IReadOnlyList<TileVisual> Tiles,
-        bool Visible,
-        Core.Layout.RectD ClipDip) : RenderCommand;
+        IReadOnlyList<SetTileVisual> Sets,
+        IReadOnlyList<TilePlacement> Placements,
+        OverlayPresentation Presentation,
+        RectD ClipDip) : RenderCommand;
 
-    internal sealed record SetOverlayHover(string MonitorId, WindowId? Window) : RenderCommand;
+    internal sealed record SetOverlayHover(string MonitorId, HitTarget? Target) : RenderCommand;
 
     internal sealed record UpdateDragGhost(
         string MonitorId,
-        WindowId? Window,
+        string? SetId,
         double DeltaX,
         double DeltaY) : RenderCommand;
 

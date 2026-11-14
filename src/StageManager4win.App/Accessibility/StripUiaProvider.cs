@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 using StageManager4win.Core.Layout;
-using StageManager4win.Core.Windows;
+using StageManager4win.Core.Stages;
 using StageManager4win.Rendering;
 
 namespace StageManager4win.Accessibility;
@@ -14,72 +14,167 @@ public sealed class StripUiaProvider :
 {
     private readonly object _sync = new();
     private readonly IRawElementProviderSimple? _host;
-    private readonly Action<WindowId> _invoke;
-    private readonly Action<WindowId> _add;
-    private TileUiaProvider[] _tiles = Array.Empty<TileUiaProvider>();
-    private AddToStageUiaProvider[] _adds = Array.Empty<AddToStageUiaProvider>();
+    private readonly Action<WindowKey> _invoke;
+    private readonly Action<WindowKey> _add;
+    private readonly Action<string> _openListing;
+    private List<ActionUiaProvider> _actions = new();
     private IRawElementProviderFragment[] _children = Array.Empty<IRawElementProviderFragment>();
+    private ActionUiaProvider[] _hitOrder = Array.Empty<ActionUiaProvider>();
     private UiaRect _bounds;
+    private bool _exposed;
 
-    public StripUiaProvider(nint hwnd, Action<WindowId> invoke, Action<WindowId> add)
+    public StripUiaProvider(
+        nint hwnd,
+        Action<WindowKey> invoke,
+        Action<WindowKey> add,
+        Action<string> openListing)
     {
         _invoke = invoke;
         _add = add;
+        _openListing = openListing;
         _host = UiaInterop.UiaHostProviderFromHwnd(hwnd, out var host) >= 0 ? host : null;
     }
 
-    public void Update(IReadOnlyList<TileVisual> tiles, int originX, int originY, uint dpi)
+    public void Update(
+        IReadOnlyList<SetTileVisual> sets,
+        IReadOnlyList<TilePlacement> placements,
+        int originX,
+        int originY,
+        uint dpi,
+        bool exposed,
+        RectD? clipDip = null,
+        RectD? modalDip = null)
     {
-        var scale = dpi / 96.0;
         lock (_sync)
         {
-            var existingTiles = new Dictionary<WindowId, TileUiaProvider>(_tiles.Length);
-            foreach (var provider in _tiles)
+            _exposed = exposed;
+            if (!exposed)
             {
-                existingTiles[provider.Window] = provider;
+                _children = Array.Empty<IRawElementProviderFragment>();
+                _hitOrder = Array.Empty<ActionUiaProvider>();
+                _bounds = default;
+                return;
             }
 
-            var existingAdds = new Dictionary<WindowId, AddToStageUiaProvider>(_adds.Length);
-            foreach (var provider in _adds)
+            var scale = dpi / 96.0;
+            var clip = clipDip is { } clipValue
+                ? ToScreen(clipValue, originX, originY, scale)
+                : (UiaRect?)null;
+            var modal = modalDip is { } modalValue
+                ? ToScreen(modalValue, originX, originY, scale)
+                : (UiaRect?)null;
+
+            var cache = new Dictionary<string, ActionUiaProvider>(_actions.Count, StringComparer.Ordinal);
+            foreach (var provider in _actions)
             {
-                existingAdds[provider.Window] = provider;
+                cache[provider.AutomationId] = provider;
             }
 
-            var nextTiles = new TileUiaProvider[tiles.Count];
-            var nextAdds = new AddToStageUiaProvider[tiles.Count];
-            var children = new IRawElementProviderFragment[tiles.Count * 2];
+            var next = new List<ActionUiaProvider>();
+            var children = new List<IRawElementProviderFragment>();
+            var setActions = new List<ActionUiaProvider>();
+            var badgeActions = new List<ActionUiaProvider>();
+            var cardActions = new List<ActionUiaProvider>();
+            var listingActions = new List<ActionUiaProvider>();
             var bounds = new UiaRect();
-            for (var index = 0; index < tiles.Count; index++)
+
+            ActionUiaProvider Add(
+                string id,
+                string name,
+                RectD boundsDip,
+                Action invoke,
+                List<ActionUiaProvider> category)
             {
-                var tile = tiles[index];
-                var stack = TileStack.HitBounds(tile.BoundsDip);
-                var rectangle = new UiaRect(
-                    originX + stack.X * scale,
-                    originY + stack.Y * scale,
-                    stack.Width * scale,
-                    stack.Height * scale);
-                if (!existingTiles.TryGetValue(tile.Window, out var tileProvider))
+                var rectangle = ToScreen(boundsDip, originX, originY, scale);
+                var offscreen = clip is { } visible && !Intersects(rectangle, visible)
+                    || modal is { } popup && Intersects(rectangle, popup);
+                if (!cache.TryGetValue(id, out var provider))
                 {
-                    tileProvider = new TileUiaProvider(this, tile.Window, _invoke);
+                    provider = new ActionUiaProvider(this, id, invoke);
                 }
 
-                if (!existingAdds.TryGetValue(tile.Window, out var addProvider))
-                {
-                    addProvider = new AddToStageUiaProvider(this, tile.Window, _add);
-                }
-
-                tileProvider.Update(tile, rectangle);
-                addProvider.Update(tile, rectangle);
-                nextTiles[index] = tileProvider;
-                nextAdds[index] = addProvider;
-                children[index * 2] = tileProvider;
-                children[index * 2 + 1] = addProvider;
+                provider.Update(name, rectangle, offscreen, invoke);
+                next.Add(provider);
+                children.Add(provider);
+                category.Add(provider);
                 bounds = Union(bounds, rectangle);
+                return provider;
             }
 
-            _tiles = nextTiles;
-            _adds = nextAdds;
-            _children = children;
+            var setsById = sets.ToDictionary(set => set.SetId, StringComparer.Ordinal);
+            foreach (var placement in placements)
+            {
+                if (!setsById.TryGetValue(placement.SetId, out var set)
+                    || placement.Cards.Count == 0)
+                {
+                    continue;
+                }
+
+                var frontPlacement = placement.Cards[^1];
+                var front = FindCard(set, frontPlacement.Window) ?? set.Cards[^1];
+                var appCount = set.Cards.Select(card => card.AppId).Distinct(StringComparer.Ordinal).Count();
+                Add(
+                    $"set|{set.SetId}",
+                    $"{front.AppName} — {set.Cards.Count} windows, {appCount} apps",
+                    placement.UnionBoundsDip,
+                    () => _invoke(front.Window),
+                    setActions);
+
+                for (var index = placement.Cards.Count - 1; index >= 0; index--)
+                {
+                    var card = placement.Cards[index];
+                    var visual = FindCard(set, card.Window);
+                    if (visual is null)
+                    {
+                        continue;
+                    }
+
+                    Add(
+                        $"window|{visual.Window.Window.Value}",
+                        $"{visual.AppName} — {visual.Title}",
+                        card.BoundsDip,
+                        () => _invoke(visual.Window),
+                        cardActions);
+                }
+
+                Add(
+                    $"add|{front.Window.Window.Value}",
+                    $"Add {front.AppName} to the stage",
+                    placement.UnionBoundsDip,
+                    () => _add(front.Window),
+                    setActions);
+
+                if (set.Badges.Count > 0)
+                {
+                    Add(
+                        $"setbadge|{set.SetId}",
+                        $"Open {front.AppName} set",
+                        Union(set.Badges.Select(badge => badge.BoundsDip)),
+                        () => _openListing(set.SetId),
+                        badgeActions);
+                }
+
+                if (set.ListingOpen)
+                {
+                    foreach (var row in set.ListingRows)
+                    {
+                        Add(
+                            $"listing|{row.Window.Window.Value}",
+                            $"{row.AppName} — {row.Title}",
+                            row.BoundsDip,
+                            () => _invoke(row.Window),
+                            listingActions);
+                    }
+                }
+            }
+
+            _actions = next;
+            _children = children.ToArray();
+            _hitOrder = listingActions
+                .Concat(badgeActions)
+                .Concat(cardActions)
+                .Concat(setActions)
+                .ToArray();
             _bounds = bounds;
         }
     }
@@ -103,10 +198,10 @@ public sealed class StripUiaProvider :
         UiaInterop.UiaControlTypePropertyId => UiaInterop.UiaPaneControlTypeId,
         UiaInterop.UiaNamePropertyId => "Stage Manager strip",
         UiaInterop.UiaIsKeyboardFocusablePropertyId => false,
-        UiaInterop.UiaIsEnabledPropertyId => true,
+        UiaInterop.UiaIsEnabledPropertyId => _exposed,
         UiaInterop.UiaIsControlElementPropertyId => true,
         UiaInterop.UiaIsContentElementPropertyId => true,
-        UiaInterop.UiaIsOffscreenPropertyId => false,
+        UiaInterop.UiaIsOffscreenPropertyId => !_exposed,
         UiaInterop.UiaBoundingRectanglePropertyId => BoundsArray(),
         _ => UiaInterop.NotSupported
     };
@@ -160,15 +255,20 @@ public sealed class StripUiaProvider :
     {
         lock (_sync)
         {
-            foreach (var tile in _tiles)
+            if (!_exposed)
             {
-                var bounds = tile.BoundingRectangle;
+                return null;
+            }
+
+            foreach (var action in _hitOrder)
+            {
+                var bounds = action.BoundingRectangle;
                 if (x >= bounds.Left
                     && x < bounds.Left + bounds.Width
                     && y >= bounds.Top
                     && y < bounds.Top + bounds.Height)
                 {
-                    return tile;
+                    return action;
                 }
             }
 
@@ -177,6 +277,54 @@ public sealed class StripUiaProvider :
     }
 
     public IRawElementProviderFragment? GetFocus() => null;
+
+    private static CardVisual? FindCard(SetTileVisual set, WindowKey window)
+    {
+        foreach (var card in set.Cards)
+        {
+            if (card.Window == window)
+            {
+                return card;
+            }
+        }
+
+        return null;
+    }
+
+    private static UiaRect ToScreen(RectD dip, int originX, int originY, double scale) =>
+        new(
+            originX + dip.X * scale,
+            originY + dip.Y * scale,
+            dip.Width * scale,
+            dip.Height * scale);
+
+    private static RectD Union(IEnumerable<RectD> rectangles)
+    {
+        var first = true;
+        var left = 0.0;
+        var top = 0.0;
+        var right = 0.0;
+        var bottom = 0.0;
+        foreach (var rectangle in rectangles)
+        {
+            if (first)
+            {
+                left = rectangle.X;
+                top = rectangle.Y;
+                right = rectangle.X + rectangle.Width;
+                bottom = rectangle.Y + rectangle.Height;
+                first = false;
+                continue;
+            }
+
+            left = Math.Min(left, rectangle.X);
+            top = Math.Min(top, rectangle.Y);
+            right = Math.Max(right, rectangle.X + rectangle.Width);
+            bottom = Math.Max(bottom, rectangle.Y + rectangle.Height);
+        }
+
+        return first ? default : new RectD(left, top, right - left, bottom - top);
+    }
 
     private static UiaRect Union(UiaRect a, UiaRect b)
     {
@@ -191,4 +339,10 @@ public sealed class StripUiaProvider :
         var bottom = Math.Max(a.Top + a.Height, b.Top + b.Height);
         return new UiaRect(left, top, right - left, bottom - top);
     }
+
+    private static bool Intersects(UiaRect a, UiaRect b) =>
+        a.Left < b.Left + b.Width
+        && a.Left + a.Width > b.Left
+        && a.Top < b.Top + b.Height
+        && a.Top + a.Height > b.Top;
 }

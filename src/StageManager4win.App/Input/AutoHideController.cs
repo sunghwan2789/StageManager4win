@@ -3,23 +3,33 @@ using StageManager4win.Windows;
 
 namespace StageManager4win.Input;
 
+public enum StripVisibility
+{
+    Hidden,
+    Occluded,
+    Revealed
+}
+
 public sealed record StripHitArea(
     RectD BoundsDip,
     RectD EdgeZoneDip,
     RectD StripBoundsDip,
-    IReadOnlyList<RectD> TilesDip);
+    IReadOnlyList<TilePlacement> Placements,
+    double ExposureDip);
 
 internal sealed class AutoHideController : IDisposable
 {
     public const double RevealEdgeDip = 2;
+    public const double HideExposureDip = 20;
     private const double HideMarginDip = 30;
     private const int HideDelayMilliseconds = 500;
 
     private readonly DisplayManager _displays;
     private readonly Func<string, StripHitArea?> _getStrip;
-    private readonly Action<string, bool> _setVisible;
+    private readonly Action<string, StripVisibility> _setVisibility;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 100 };
     private readonly Dictionary<string, long> _outsideSince = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, StripVisibility> _visibility = new(StringComparer.Ordinal);
     private IReadOnlyList<MonitorDescriptor> _monitors = Array.Empty<MonitorDescriptor>();
     private bool _suppressed;
     private bool _disposed;
@@ -27,11 +37,11 @@ internal sealed class AutoHideController : IDisposable
     public AutoHideController(
         DisplayManager displays,
         Func<string, StripHitArea?> getStrip,
-        Action<string, bool> setVisible)
+        Action<string, StripVisibility> setVisibility)
     {
         _displays = displays;
         _getStrip = getStrip;
-        _setVisible = setVisible;
+        _setVisibility = setVisibility;
         _monitors = _displays.GetMonitors();
         _timer.Tick += (_, _) => Poll();
         _timer.Start();
@@ -43,7 +53,15 @@ internal sealed class AutoHideController : IDisposable
         _outsideSince.Clear();
     }
 
-    public void Suppress(bool suppressed) => _suppressed = suppressed;
+    public void Suppress(bool suppressed)
+    {
+        _suppressed = suppressed;
+        _outsideSince.Clear();
+        if (!suppressed)
+        {
+            Poll();
+        }
+    }
 
     public void Dispose()
     {
@@ -77,26 +95,37 @@ internal sealed class AutoHideController : IDisposable
             var scale = 96.0 / monitor.Dpi;
             var x = (position.X - monitor.Bounds.Left) * scale;
             var y = (position.Y - monitor.Bounds.Top) * scale;
+            var insideEdge = Inside(area.EdgeZoneDip, x, y);
+            var insideStrip = Inside(area.StripBoundsDip, x, y);
+            var insideMargin = Inside(Inflate(area.BoundsDip, HideMarginDip), x, y);
+            var current = _visibility.GetValueOrDefault(monitor.Id);
+
+            if (insideEdge)
+            {
+                // Only the 2 DIP edge reveals a hidden strip.
+                _outsideSince.Remove(monitor.Id);
+                Set(monitor.Id, StripVisibility.Revealed);
+                continue;
+            }
+
             if (_suppressed)
             {
-                if (Inside(area.StripBoundsDip, x, y) || Inside(area.EdgeZoneDip, x, y))
+                if (insideStrip)
                 {
-                    _setVisible(monitor.Id, true);
+                    Set(monitor.Id, StripVisibility.Revealed);
                 }
 
                 _outsideSince.Remove(monitor.Id);
                 continue;
             }
 
-            if (Inside(area.EdgeZoneDip, x, y))
+            if (current == StripVisibility.Revealed && (insideStrip || insideMargin))
             {
-                // Only the edge reveals a hidden strip; hovering its old area does not.
                 _outsideSince.Remove(monitor.Id);
-                _setVisible(monitor.Id, true);
                 continue;
             }
 
-            if (Inside(Inflate(area.BoundsDip, HideMarginDip), x, y))
+            if (insideStrip || insideMargin)
             {
                 _outsideSince.Remove(monitor.Id);
                 continue;
@@ -108,9 +137,24 @@ internal sealed class AutoHideController : IDisposable
             }
             else if (now - since >= HideDelayMilliseconds)
             {
-                _setVisible(monitor.Id, false);
+                Set(
+                    monitor.Id,
+                    area.ExposureDip > HideExposureDip
+                        ? StripVisibility.Occluded
+                        : StripVisibility.Hidden);
             }
         }
+    }
+
+    private void Set(string monitorId, StripVisibility visibility)
+    {
+        if (_visibility.GetValueOrDefault(monitorId) == visibility)
+        {
+            return;
+        }
+
+        _visibility[monitorId] = visibility;
+        _setVisibility(monitorId, visibility);
     }
 
     private static RectD Inflate(RectD bounds, double margin) =>

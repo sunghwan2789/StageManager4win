@@ -13,7 +13,6 @@ public sealed class HotkeyManager : IDisposable
 
     public HotkeyManager() => _window = new HotkeyWindow(this);
 
-    public event Action? ToggleRequested;
     public event Action? NextRequested;
     public event Action? PreviousRequested;
     public event Action? ShowDesktopRequested;
@@ -24,7 +23,6 @@ public sealed class HotkeyManager : IDisposable
 
         var bindings = new (string Name, HotkeyBinding Binding)[]
         {
-            ("toggle", settings.Toggle),
             ("next", settings.Next),
             ("previous", settings.Previous),
             ("show desktop", settings.ShowDesktop)
@@ -55,7 +53,7 @@ public sealed class HotkeyManager : IDisposable
             return;
         }
 
-        for (var id = 1; id <= 4; id++)
+        for (var id = 1; id <= 3; id++)
         {
             PInvoke.UnregisterHotKey(new HWND(_window.Handle), id);
         }
@@ -74,15 +72,12 @@ public sealed class HotkeyManager : IDisposable
         switch (id)
         {
             case 1:
-                ToggleRequested?.Invoke();
-                break;
-            case 2:
                 NextRequested?.Invoke();
                 break;
-            case 3:
+            case 2:
                 PreviousRequested?.Invoke();
                 break;
-            case 4:
+            case 3:
                 ShowDesktopRequested?.Invoke();
                 break;
         }

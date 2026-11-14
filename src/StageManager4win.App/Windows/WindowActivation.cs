@@ -23,6 +23,21 @@ internal static class WindowActivation
     public static void Minimize(WindowId window) =>
         PInvoke.ShowWindow(new HWND((nint)window.Value), SHOW_WINDOW_CMD.SW_MINIMIZE);
 
+    public static void Maximize(WindowId window) =>
+        PInvoke.ShowWindow(new HWND((nint)window.Value), SHOW_WINDOW_CMD.SW_MAXIMIZE);
+
+    public static bool Place(WindowId window, WindowBounds bounds) =>
+        PInvoke.SetWindowPos(
+            new HWND((nint)window.Value),
+            new HWND(0),
+            bounds.Left,
+            bounds.Top,
+            bounds.Width,
+            bounds.Height,
+            SET_WINDOW_POS_FLAGS.SWP_NOZORDER
+            | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE
+            | SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER);
+
     public static void RestoreNoActivate(WindowId window) =>
         PInvoke.ShowWindow(new HWND((nint)window.Value), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
 

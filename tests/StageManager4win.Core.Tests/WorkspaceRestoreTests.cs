@@ -67,6 +67,27 @@ public class WorkspaceRestoreTests
     }
 
     [Fact]
+    public void Plan_OrdersTheStripByTheSavedStripOrder()
+    {
+        var windows = Windows(W(1, "A", "a"), W(2, "B", "b"), W(3, "C", "c"));
+        var current = new MonitorState(
+            "M1",
+            null,
+            new[] { Set("s1", 1), Set("s2", 2), Set("s3", 3) });
+        var saved = new MonitorWorkspace(
+            "M1",
+            new[] { new WindowIdentity("B", "b"), new WindowIdentity("A", "a") },
+            null,
+            new[] { new WindowIdentity("C", "c") });
+
+        var plan = WorkspaceRestore.Plan(current, saved, windows);
+
+        Assert.NotNull(plan);
+        Assert.Equal(new[] { new WindowId(3) }, plan!.Stage);
+        Assert.Equal(new[] { new WindowId(2), new WindowId(1) }, plan.Strip);
+    }
+
+    [Fact]
     public void Plan_WithoutASavedStage_ReturnsNull()
     {
         var windows = Windows(W(1, "A", "a"));

@@ -15,10 +15,14 @@ EnumWindows
 GetWindowThreadProcessId
 IsWindowVisible
 IsIconic
+IsZoomed
 GetWindowRect
 GetWindowPlacement
 WINDOWPLACEMENT
 GetWindowLongW
+SetWindowLongW
+IsWindowEnabled
+GetLastActivePopup
 GetWindow
 GetShellWindow
 GetClassName

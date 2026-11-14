@@ -1,37 +1,33 @@
 using System.Runtime.InteropServices;
-using StageManager4win.Core.Windows;
-using StageManager4win.Rendering;
 
 namespace StageManager4win.Accessibility;
 
 [ComVisible(true)]
 [ClassInterface(ClassInterfaceType.None)]
-public sealed class AddToStageUiaProvider :
+public sealed class ActionUiaProvider :
     IRawElementProviderSimple,
     IRawElementProviderFragment,
     IInvokeProvider
 {
-    private static readonly object NotSupported = UiaInterop.NotSupported;
     private readonly StripUiaProvider _root;
-    private readonly Action<WindowId> _add;
-    private AddData _data;
+    private Action _invoke;
+    private ActionData _data;
 
-    public AddToStageUiaProvider(StripUiaProvider root, WindowId window, Action<WindowId> add)
+    public ActionUiaProvider(StripUiaProvider root, string automationId, Action invoke)
     {
         _root = root;
-        _add = add;
-        _data = new AddData(window, string.Empty, string.Empty, string.Empty, default);
+        _invoke = invoke;
+        _data = new ActionData(automationId, string.Empty, default, true);
     }
 
-    public WindowId Window => Volatile.Read(ref _data).Window;
+    public string AutomationId => Volatile.Read(ref _data).AutomationId;
 
-    public void Update(TileVisual tile, UiaRect bounds) =>
-        Volatile.Write(ref _data, new AddData(
-            tile.Window,
-            tile.AppId,
-            tile.AppName,
-            tile.Title,
-            bounds));
+    public void Update(string name, UiaRect bounds, bool offscreen, Action invoke)
+    {
+        var id = AutomationId;
+        Volatile.Write(ref _data, new ActionData(id, name, bounds, offscreen));
+        _invoke = invoke;
+    }
 
     public UiaProviderOptions ProviderOptions => UiaProviderOptions.ServerSideProvider;
 
@@ -44,16 +40,16 @@ public sealed class AddToStageUiaProvider :
         return propertyId switch
         {
             UiaInterop.UiaControlTypePropertyId => UiaInterop.UiaButtonControlTypeId,
-            UiaInterop.UiaNamePropertyId => $"Add {data.AppName} to the stage",
-            UiaInterop.UiaAutomationIdPropertyId => $"add|{data.AppId}|{data.Window.Value}",
+            UiaInterop.UiaNamePropertyId => data.Name,
+            UiaInterop.UiaAutomationIdPropertyId => data.AutomationId,
             UiaInterop.UiaIsKeyboardFocusablePropertyId => false,
             UiaInterop.UiaIsEnabledPropertyId => true,
             UiaInterop.UiaIsControlElementPropertyId => true,
             UiaInterop.UiaIsContentElementPropertyId => true,
-            UiaInterop.UiaIsOffscreenPropertyId => false,
+            UiaInterop.UiaIsOffscreenPropertyId => data.IsOffscreen,
             UiaInterop.UiaBoundingRectanglePropertyId =>
                 new[] { data.Bounds.Left, data.Bounds.Top, data.Bounds.Width, data.Bounds.Height },
-            _ => NotSupported
+            _ => UiaInterop.NotSupported
         };
     }
 
@@ -68,7 +64,7 @@ public sealed class AddToStageUiaProvider :
     };
 
     public int[] GetRuntimeId() =>
-        new[] { UiaInterop.UiaAppendRuntimeId, unchecked((int)Window.Value) ^ 0x5A5A5A };
+        new[] { UiaInterop.UiaAppendRuntimeId, Hash(AutomationId) };
 
     public UiaRect BoundingRectangle => Volatile.Read(ref _data).Bounds;
 
@@ -80,12 +76,25 @@ public sealed class AddToStageUiaProvider :
 
     public IRawElementProviderFragmentRoot FragmentRoot => _root;
 
-    public void Invoke() => _add(Window);
+    public void Invoke() => _invoke();
 
-    private sealed record AddData(
-        WindowId Window,
-        string AppId,
-        string AppName,
-        string Title,
-        UiaRect Bounds);
+    private static int Hash(string value)
+    {
+        unchecked
+        {
+            var hash = 2166136261;
+            foreach (var character in value)
+            {
+                hash = (hash ^ character) * 16777619;
+            }
+
+            return (int)hash;
+        }
+    }
+
+    private sealed record ActionData(
+        string AutomationId,
+        string Name,
+        UiaRect Bounds,
+        bool IsOffscreen);
 }

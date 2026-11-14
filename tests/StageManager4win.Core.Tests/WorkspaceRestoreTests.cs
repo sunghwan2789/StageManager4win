@@ -15,16 +15,22 @@ public class WorkspaceRestoreTests
     private static IReadOnlyDictionary<WindowId, WindowSnapshot> Windows(params WindowSnapshot[] windows) =>
         windows.ToDictionary(window => window.Id);
 
+    private static WindowKey K(long id) => new(new WindowId(id), (int)id);
+
+    private static StageSet Set(string id, params long[] ids)
+    {
+        var keys = ids.Select(id => K(id)).ToArray();
+        return new StageSet(id, keys, keys[^1], new Dictionary<WindowKey, WindowGeometry>());
+    }
+
     [Fact]
     public void Plan_KeepsWindowsThatAreOnTheCurrentStageButNotInTheSavedStage()
     {
         var windows = Windows(W(1, "A", "a"), W(2, "A", "a2"), W(3, "B", "b"), W(4, "C", "c"));
         var current = new MonitorState(
             "M1",
-            new[] { new WindowId(3) },
-            new[] { new WindowId(4), new WindowId(1), new WindowId(2) },
-            new WindowId(3),
-            "B");
+            Set("active", 3),
+            new[] { Set("s4", 4), Set("s1", 1), Set("s2", 2) });
         var saved = new MonitorWorkspace(
             "M1",
             new[] { new WindowIdentity("B", "b") },
@@ -35,10 +41,8 @@ public class WorkspaceRestoreTests
 
         Assert.NotNull(plan);
         Assert.Equal(new[] { new WindowId(1) }, plan!.Stage);
-        Assert.Contains(new WindowId(3), plan.Strip);
+        Assert.Equal(new[] { new WindowId(3), new WindowId(4), new WindowId(2) }, plan.Strip);
         Assert.DoesNotContain(new WindowId(3), plan.Stage);
-        Assert.Contains(new WindowId(2), plan.Strip);
-        Assert.Contains(new WindowId(4), plan.Strip);
     }
 
     [Fact]
@@ -47,10 +51,8 @@ public class WorkspaceRestoreTests
         var windows = Windows(W(1, "A", "a"), W(2, "B", "b"), W(3, "C", "c"));
         var current = new MonitorState(
             "M1",
-            Array.Empty<WindowId>(),
-            new[] { new WindowId(2), new WindowId(1), new WindowId(3) },
             null,
-            null);
+            new[] { Set("s2", 2), Set("s1", 1), Set("s3", 3) });
         var saved = new MonitorWorkspace(
             "M1",
             Array.Empty<WindowIdentity>(),
@@ -68,12 +70,7 @@ public class WorkspaceRestoreTests
     public void Plan_WithoutASavedStage_ReturnsNull()
     {
         var windows = Windows(W(1, "A", "a"));
-        var current = new MonitorState(
-            "M1",
-            new[] { new WindowId(1) },
-            Array.Empty<WindowId>(),
-            new WindowId(1),
-            "A");
+        var current = new MonitorState("M1", Set("active", 1), Array.Empty<StageSet>());
         var saved = new MonitorWorkspace("M1", Array.Empty<WindowIdentity>(), null);
 
         Assert.Null(WorkspaceRestore.Plan(current, saved, windows));
@@ -85,10 +82,8 @@ public class WorkspaceRestoreTests
         var windows = Windows(W(1, "A", "a"), W(3, "B", "b"));
         var current = new MonitorState(
             "M1",
-            new[] { new WindowId(3) },
-            new[] { new WindowId(1) },
-            null,
-            null);
+            Set("active", 3),
+            new[] { Set("s1", 1) });
         var saved = new MonitorWorkspace(
             "M1",
             Array.Empty<WindowIdentity>(),
@@ -99,6 +94,31 @@ public class WorkspaceRestoreTests
 
         Assert.NotNull(plan);
         Assert.Equal(new WindowId(3), plan!.Foreground);
-        Assert.Equal("B", plan.ActiveAppId);
+    }
+
+    [Fact]
+    public void Plan_PreservesTheSavedStageOrder()
+    {
+        var windows = Windows(W(1, "A", "a"), W(2, "B", "b"), W(3, "C", "c"));
+        var current = new MonitorState(
+            "M1",
+            null,
+            new[] { Set("s1", 1), Set("s2", 2), Set("s3", 3) });
+        var saved = new MonitorWorkspace(
+            "M1",
+            Array.Empty<WindowIdentity>(),
+            null,
+            new[]
+            {
+                new WindowIdentity("C", "c"),
+                new WindowIdentity("A", "a"),
+                new WindowIdentity("B", "b")
+            });
+
+        var plan = WorkspaceRestore.Plan(current, saved, windows);
+
+        Assert.NotNull(plan);
+        Assert.Equal(new[] { new WindowId(3), new WindowId(1), new WindowId(2) }, plan!.Stage);
+        Assert.Empty(plan.Strip);
     }
 }

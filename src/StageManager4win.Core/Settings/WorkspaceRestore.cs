@@ -3,9 +3,15 @@ using StageManager4win.Core.Windows;
 
 namespace StageManager4win.Core.Settings;
 
+public sealed record WorkspacePlan(
+    string MonitorId,
+    IReadOnlyList<WindowId> Stage,
+    IReadOnlyList<WindowId> Strip,
+    WindowId? Foreground);
+
 public static class WorkspaceRestore
 {
-    public static MonitorState? Plan(
+    public static WorkspacePlan? Plan(
         MonitorState current,
         MonitorWorkspace saved,
         IReadOnlyDictionary<WindowId, WindowSnapshot> windows)
@@ -15,8 +21,7 @@ public static class WorkspaceRestore
             return null;
         }
 
-        // Current stage windows may be missing from a saved strip, so both lists are candidates.
-        var candidates = current.Stage.Concat(current.Strip).Distinct().ToList();
+        var candidates = Candidates(current);
         var staged = new HashSet<WindowId>();
         var stage = new List<WindowId>();
         foreach (var identity in saved.Stage)
@@ -32,10 +37,23 @@ public static class WorkspaceRestore
         var foreground = saved.Foreground is { } foregroundIdentity
             ? Find(candidates, foregroundIdentity, windows, null)
             : null;
-        var activeAppId = foreground is { } window && windows.TryGetValue(window, out var snapshot)
-            ? snapshot.AppId
-            : null;
-        return new MonitorState(current.MonitorId, stage, strip, foreground, activeAppId);
+        return new WorkspacePlan(current.MonitorId, stage, strip, foreground);
+    }
+
+    private static List<WindowId> Candidates(MonitorState current)
+    {
+        var candidates = new List<WindowId>();
+        if (current.ActiveSet is { } active)
+        {
+            candidates.AddRange(active.Members.Reverse().Select(key => key.Window));
+        }
+
+        foreach (var set in current.StripSets)
+        {
+            candidates.AddRange(set.Members.Reverse().Select(key => key.Window));
+        }
+
+        return candidates.Distinct().ToList();
     }
 
     private static WindowId? Find(

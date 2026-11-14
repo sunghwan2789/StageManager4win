@@ -136,6 +136,25 @@ public class WindowGeometryTests
     }
 
     [Fact]
+    public void SelectMonitor_ConvertsSavedDipToPixelsAtTheSavedDpi()
+    {
+        var monitors = new[]
+        {
+            new MonitorDescriptor("left", new WindowBounds(0, 0, 1000, 1000),
+                new WindowBounds(0, 0, 1000, 1000), 96),
+            new MonitorDescriptor("right", new WindowBounds(1000, 0, 1000, 1000),
+                new WindowBounds(1000, 0, 1000, 1000), 192)
+        };
+        var geometry = WindowGeometry.FromPixels(
+            new WindowBounds(1100, 100, 200, 400), "right", 192, isMaximized: false);
+
+        var selected = WindowGeometry.SelectMonitor(
+            monitors, geometry.BoundsDip, geometry.Dpi);
+
+        Assert.Equal("right", selected!.Id);
+    }
+
+    [Fact]
     public void SelectMonitor_WithoutIntersection_ChoosesTheNearestCenter()
     {
         var monitors = new[]

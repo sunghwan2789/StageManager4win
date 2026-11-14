@@ -59,13 +59,15 @@ public sealed record WindowGeometry(
 
     public static MonitorDescriptor? SelectMonitor(
         IReadOnlyList<MonitorDescriptor> monitors,
-        RectD bounds)
+        RectD bounds,
+        uint dpi = 96)
     {
+        var pixels = ToRect(ToPixels(bounds, dpi));
         MonitorDescriptor? best = null;
         var bestArea = 0.0;
         foreach (var monitor in monitors)
         {
-            var area = IntersectionArea(bounds, ToRect(monitor.Bounds));
+            var area = IntersectionArea(pixels, ToRect(monitor.Bounds));
             if (area > bestArea)
             {
                 bestArea = area;
@@ -78,8 +80,8 @@ public sealed record WindowGeometry(
             return best;
         }
 
-        var centerX = bounds.X + bounds.Width / 2;
-        var centerY = bounds.Y + bounds.Height / 2;
+        var centerX = pixels.X + pixels.Width / 2;
+        var centerY = pixels.Y + pixels.Height / 2;
         var nearest = double.MaxValue;
         foreach (var monitor in monitors)
         {

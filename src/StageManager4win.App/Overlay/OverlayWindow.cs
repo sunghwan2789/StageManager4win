@@ -118,7 +118,7 @@ internal sealed class OverlayWindow : Form
         _placements.AddRange(placements);
         _listingRows = sets
             .Where(set => set.ListingOpen)
-            .SelectMany(set => set.ListingRows.Select(row =>
+            .SelectMany(set => set.ListingRows.Where(row => !row.IsOffscreen).Select(row =>
                 new ListingRowPlacement(set.SetId, row.Window, row.RowIndex, row.BoundsDip)))
             .ToArray();
         UpdateUia();
@@ -628,6 +628,12 @@ internal sealed class OverlayWindow : Form
         var region = PInvoke.CreateRectRgn(0, 0, 0, 0);
         if (_presentation is not OverlayPresentation.Hidden)
         {
+            if (ListingOpen)
+            {
+                AddRect(region, new RectD(
+                    0, 0, ClientSize.Width * 96.0 / _dpi, ClientSize.Height * 96.0 / _dpi));
+            }
+
             foreach (var placement in _placements)
             {
                 var bounds = Intersect(placement.HitBoundsDip, _stripBounds);

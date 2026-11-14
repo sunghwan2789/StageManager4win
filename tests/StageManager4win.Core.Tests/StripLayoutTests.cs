@@ -75,6 +75,15 @@ public class StripLayoutTests
     }
 
     [Fact]
+    public void Cards_StackIndexIsFrontRelative()
+    {
+        var layout = StripLayoutCalculator.Calculate(
+            new[] { Item(1, 1, 1, 1, 2, 3) }, Options);
+
+        Assert.Equal(new[] { 2, 1, 0 }, layout.Tiles[0].Cards.Select(card => card.StackIndex));
+    }
+
+    [Fact]
     public void RightFan_FrontCardExtendsInwardAndBackCardMeetsTheUnionRight()
     {
         var layout = StripLayoutCalculator.Calculate(

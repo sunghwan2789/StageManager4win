@@ -11,6 +11,7 @@ internal enum WindowEventKind
     DesktopSwitch,
     MoveSizeStart,
     MoveSizeEnd,
+    Destroyed,
 }
 
 internal sealed class WindowEventWatcher : IDisposable
@@ -32,6 +33,7 @@ internal sealed class WindowEventWatcher : IDisposable
 
         _started = true;
         Hook(PInvoke.EVENT_OBJECT_CREATE, PInvoke.EVENT_OBJECT_HIDE);
+        Hook(PInvoke.EVENT_OBJECT_DESTROY, PInvoke.EVENT_OBJECT_DESTROY);
         Hook(PInvoke.EVENT_OBJECT_CLOAKED, PInvoke.EVENT_OBJECT_UNCLOAKED);
         Hook(PInvoke.EVENT_SYSTEM_FOREGROUND, PInvoke.EVENT_SYSTEM_FOREGROUND);
         Hook(PInvoke.EVENT_SYSTEM_MINIMIZESTART, PInvoke.EVENT_SYSTEM_MINIMIZEEND);
@@ -93,6 +95,13 @@ internal sealed class WindowEventWatcher : IDisposable
                 if (hwnd != HWND.Null && !IsOwnProcess(hwnd) && idObject == 0 && idChild == 0)
                 {
                     Raised?.Invoke(WindowEventKind.MoveSizeStart, (nint)hwnd);
+                }
+
+                return;
+            case PInvoke.EVENT_OBJECT_DESTROY:
+                if (hwnd != HWND.Null && !IsOwnProcess(hwnd) && idObject == 0 && idChild == 0)
+                {
+                    Raised?.Invoke(WindowEventKind.Destroyed, (nint)hwnd);
                 }
 
                 return;

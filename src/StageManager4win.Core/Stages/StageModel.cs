@@ -75,7 +75,7 @@ public sealed class StageModel
         }
 
         _windows[snapshot.Id] = snapshot;
-        EnsureMonitor(snapshot.MonitorId).StripSets.Insert(0, Singleton(WindowKey.For(snapshot)));
+        EnsureMonitor(snapshot.MonitorId).StripSets.Add(Singleton(WindowKey.For(snapshot)));
     }
 
     public MonitorChange? Update(WindowSnapshot snapshot)
@@ -96,7 +96,7 @@ public sealed class StageModel
                 RemoveMonitorIfEmpty(located.Monitor);
             }
 
-            EnsureMonitor(snapshot.MonitorId).StripSets.Insert(0, Singleton(WindowKey.For(snapshot)));
+            EnsureMonitor(snapshot.MonitorId).StripSets.Add(Singleton(WindowKey.For(snapshot)));
             return null;
         }
 
@@ -312,7 +312,7 @@ public sealed class StageModel
         var key = WindowKey.For(snapshot);
         if (Locate(key) is not { } located)
         {
-            EnsureMonitor(snapshot.MonitorId).StripSets.Insert(0, Singleton(key));
+            EnsureMonitor(snapshot.MonitorId).StripSets.Add(Singleton(key));
             return;
         }
 
@@ -322,7 +322,6 @@ public sealed class StageModel
         }
 
         RemoveKey(located.Monitor, key, promoteWhenActiveEmpty: true);
-        EnsureMonitor(snapshot.MonitorId).StripSets.Insert(0, Singleton(key));
     }
 
     public void Restore(WindowId window)
@@ -585,10 +584,11 @@ public sealed class StageModel
             return new ActivationResult(ActivationOutcome.CreatedSet, created.Id);
         }
 
-        destination.ActiveSet = destination.ActiveSet with
+        var active = destination.ActiveSet with
         {
             Members = destination.ActiveSet.Members.Append(key).ToArray()
         };
+        destination.ActiveSet = WithForeground(active, active.Foreground);
         return new ActivationResult(ActivationOutcome.Changed, destination.ActiveSet.Id);
     }
 
@@ -600,10 +600,11 @@ public sealed class StageModel
             return;
         }
 
-        destination.ActiveSet = destination.ActiveSet with
+        var active = destination.ActiveSet with
         {
             Members = destination.ActiveSet.Members.Append(key).ToArray()
         };
+        destination.ActiveSet = WithForeground(active, active.Foreground);
     }
 
     private static void RemoveFromStrip(MonitorData monitor, IReadOnlyList<WindowKey> keys)

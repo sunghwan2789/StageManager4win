@@ -80,7 +80,7 @@ public static class StripLayoutCalculator
                             x,
                             middleY,
                             options.Edge),
-                        index,
+                        count - 1 - index,
                         TileStack.Scale(index, count)));
                 }
 

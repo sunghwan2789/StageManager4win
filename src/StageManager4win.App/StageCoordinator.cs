@@ -59,6 +59,7 @@ internal sealed class StageCoordinator : IDisposable
     private MovingWindow? _moving;
     private string? _cycleMonitorId;
     private string? _openListingSetId;
+    private WindowId? _listingForeground;
     private bool _rebuildPending;
     private bool _started;
     private bool _disposed;
@@ -363,6 +364,7 @@ internal sealed class StageCoordinator : IDisposable
     // stage is hidden and restored here instead.
     public void ShowDesktop()
     {
+        CloseListing();
         if (_desktopShown)
         {
             _desktopShown = false;
@@ -827,6 +829,11 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         var foreground = _source.GetForegroundWindow();
+        if (_openListingSetId is not null && foreground != _listingForeground)
+        {
+            CloseListing();
+        }
+
         // A window being minimized can still report as foreground; don't stage it again.
         if (foreground is { } window
             && _model.Windows.TryGetValue(window, out var foregroundSnapshot)
@@ -986,13 +993,18 @@ internal sealed class StageCoordinator : IDisposable
         return _stripAreas.GetValueOrDefault(monitorId);
     }
 
-    private bool IsOverStrip(Point point) =>
-        _openListingSetId is not null || MonitorOverStrip(point) is not null;
+    private bool IsOverStrip(Point point) => MonitorOverStrip(point) is not null;
 
     private void OnStripWheel(Point point, int delta)
     {
-        if (_disposed || !_settings.Enabled || Suspended || _openListingSetId is not null)
+        if (_disposed || !_settings.Enabled || Suspended)
         {
+            return;
+        }
+
+        if (_openListingSetId is { } listing)
+        {
+            ScrollListing(listing, delta);
             return;
         }
 
@@ -1211,27 +1223,7 @@ internal sealed class StageCoordinator : IDisposable
                     continue;
                 }
 
-                var cards = new List<CardVisual>(placement.Cards.Count);
-                foreach (var card in placement.Cards)
-                {
-                    if (Resolve(card.Window) is not { } snapshot)
-                    {
-                        continue;
-                    }
-
-                    cards.Add(new CardVisual(
-                        card.Window,
-                        card.BoundsDip,
-                        card.StackIndex,
-                        card.Scale,
-                        GetIcon(snapshot),
-                        snapshot.IsMinimized,
-                        (nint)snapshot.Id.Value,
-                        snapshot.AppId,
-                        snapshot.AppName,
-                        snapshot.Title));
-                }
-
+                var cards = Cards(placement);
                 var badges = Badges(group, placement.BadgeBoundsDip);
                 var listing = Listing(
                     group,
@@ -1251,6 +1243,36 @@ internal sealed class StageCoordinator : IDisposable
                     listing.Open,
                     highContrast,
                     borderBgra));
+            }
+
+            // Keep the active set captured so its last DComp frame survives demotion.
+            if (state?.ActiveSet is { Members.Count: > 0 } active
+                && Resolve(active.Front) is { } activeFront)
+            {
+                var appCount = active.Members
+                    .Select(Resolve)
+                    .Where(snapshot => snapshot is not null)
+                    .Select(snapshot => snapshot!.AppId)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+                var item = new StripItem(active.Id, active.Members, appCount, AspectOf(activeFront));
+                var capture = StripLayoutCalculator.Calculate(new[] { item }, options, 0);
+                if (capture.Tiles.Count > 0)
+                {
+                    var placement = capture.Tiles[0];
+                    visuals.Add(new SetTileVisual(
+                        active.Id,
+                        placement.UnionBoundsDip,
+                        TileCornerRadiusDip,
+                        Cards(placement),
+                        Array.Empty<BadgeChipVisual>(),
+                        placement.BadgeBoundsDip,
+                        Array.Empty<ListingRowVisual>(),
+                        false,
+                        highContrast,
+                        borderBgra,
+                        CaptureOnly: true));
+                }
             }
 
             var open = visuals.Any(visual => visual.ListingOpen);
@@ -1283,6 +1305,32 @@ internal sealed class StageCoordinator : IDisposable
                 presentation,
                 layout.StripBounds));
         }
+    }
+
+    private List<CardVisual> Cards(TilePlacement placement)
+    {
+        var cards = new List<CardVisual>(placement.Cards.Count);
+        foreach (var card in placement.Cards)
+        {
+            if (Resolve(card.Window) is not { } snapshot)
+            {
+                continue;
+            }
+
+            cards.Add(new CardVisual(
+                card.Window,
+                card.BoundsDip,
+                card.StackIndex,
+                card.Scale,
+                GetIcon(snapshot),
+                snapshot.IsMinimized,
+                (nint)snapshot.Id.Value,
+                snapshot.AppId,
+                snapshot.AppName,
+                snapshot.Title));
+        }
+
+        return cards;
     }
 
     private double AspectOf(WindowSnapshot snapshot)
@@ -1397,30 +1445,25 @@ internal sealed class StageCoordinator : IDisposable
         var y = union.Y + union.Height / 2 - height / 2;
         var maxY = workTop + Math.Max(0, workHeight - height);
         y = Math.Clamp(y, workTop, maxY);
-        var rows = new List<ListingRowVisual>(visibleRows);
-        for (var index = 0; index < visibleRows; index++)
+        var rows = new List<ListingRowVisual>(members.Length);
+        for (var rowIndex = 0; rowIndex < members.Length; rowIndex++)
         {
-            var rowIndex = scroll + index;
-            if (rowIndex >= members.Length)
-            {
-                break;
-            }
-
-            var key = members[rowIndex];
-            if (Resolve(key) is not { } snapshot)
+            if (Resolve(members[rowIndex]) is not { } snapshot)
             {
                 continue;
             }
 
             rows.Add(new ListingRowVisual(
-                key,
+                members[rowIndex],
                 rowIndex,
-                new RectD(x + ListingPaddingDip, y + ListingPaddingDip + index * ListingRowDip,
+                new RectD(x + ListingPaddingDip,
+                    y + ListingPaddingDip + (rowIndex - scroll) * ListingRowDip,
                     width - ListingPaddingDip * 2, ListingRowDip),
                 snapshot.AppId,
                 snapshot.AppName,
                 snapshot.Title,
-                GetIcon(snapshot)));
+                GetIcon(snapshot),
+                rowIndex < scroll || rowIndex >= scroll + visibleRows));
         }
 
         return (rows, true);
@@ -1490,6 +1533,7 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         _openListingSetId = setId;
+        _listingForeground = _source.GetForegroundWindow();
         _listingScroll[setId] = 0;
         _autoHide.Suppress(true);
         Refresh();
@@ -1509,6 +1553,7 @@ internal sealed class StageCoordinator : IDisposable
     private void ClearListing()
     {
         _openListingSetId = null;
+        _listingForeground = null;
         _listingScroll.Clear();
         _listingMaxScroll.Clear();
         _autoHide.Suppress(false);
@@ -1811,7 +1856,8 @@ internal sealed class StageCoordinator : IDisposable
             return false;
         }
 
-        var monitor = SelectMonitor(geometry);
+        var monitor = _monitors.FirstOrDefault(candidate => candidate.Id == geometry.MonitorId)
+            ?? WindowGeometry.SelectMonitor(_monitors, geometry.BoundsDip, geometry.Dpi);
         if (monitor is null)
         {
             return false;
@@ -1855,21 +1901,6 @@ internal sealed class StageCoordinator : IDisposable
         }
 
         return null;
-    }
-
-    private MonitorDescriptor? SelectMonitor(WindowGeometry geometry)
-    {
-        var saved = _monitors.FirstOrDefault(monitor => monitor.Id == geometry.MonitorId);
-        if (saved is not null)
-        {
-            return saved;
-        }
-
-        var pixels = geometry.ToPixels(geometry.Dpi);
-        var id = MonitorTopology.IdForBounds(_monitors, pixels);
-        return id is null
-            ? _monitors.FirstOrDefault()
-            : _monitors.FirstOrDefault(monitor => monitor.Id == id);
     }
 
     private static WindowBounds Clamp(WindowBounds bounds, WindowBounds area)

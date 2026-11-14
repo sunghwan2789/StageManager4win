@@ -13,7 +13,8 @@ public sealed record SetTileVisual(
     IReadOnlyList<ListingRowVisual> ListingRows,
     bool ListingOpen,
     bool HighContrast,
-    uint BorderBgra);
+    uint BorderBgra,
+    bool CaptureOnly = false);
 
 public sealed record CardVisual(
     WindowKey Window,
@@ -42,4 +43,5 @@ public sealed record ListingRowVisual(
     string AppId,
     string AppName,
     string Title,
-    IconBitmap? Icon);
+    IconBitmap? Icon,
+    bool IsOffscreen = false);

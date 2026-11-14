@@ -83,10 +83,12 @@ public sealed class StripUiaProvider :
                 string name,
                 RectD boundsDip,
                 Action invoke,
-                List<ActionUiaProvider> category)
+                List<ActionUiaProvider> category,
+                bool forceOffscreen = false)
             {
                 var rectangle = ToScreen(boundsDip, originX, originY, scale);
-                var offscreen = clip is { } visible && !Intersects(rectangle, visible)
+                var offscreen = forceOffscreen
+                    || clip is { } visible && !Intersects(rectangle, visible)
                     || modal is { } popup && Intersects(rectangle, popup);
                 if (!cache.TryGetValue(id, out var provider))
                 {
@@ -97,7 +99,11 @@ public sealed class StripUiaProvider :
                 next.Add(provider);
                 children.Add(provider);
                 category.Add(provider);
-                bounds = Union(bounds, rectangle);
+                if (!offscreen)
+                {
+                    bounds = Union(bounds, rectangle);
+                }
+
                 return provider;
             }
 
@@ -105,6 +111,7 @@ public sealed class StripUiaProvider :
             foreach (var placement in placements)
             {
                 if (!setsById.TryGetValue(placement.SetId, out var set)
+                    || set.CaptureOnly
                     || placement.Cards.Count == 0)
                 {
                     continue;
@@ -135,14 +142,13 @@ public sealed class StripUiaProvider :
                         card.BoundsDip,
                         () => _invoke(visual.Window),
                         cardActions);
+                    Add(
+                        $"add|{visual.Window.Window.Value}",
+                        $"Add {visual.AppName} to current set",
+                        card.BoundsDip,
+                        () => _add(visual.Window),
+                        setActions);
                 }
-
-                Add(
-                    $"add|{front.Window.Window.Value}",
-                    $"Add {front.AppName} to the stage",
-                    placement.UnionBoundsDip,
-                    () => _add(front.Window),
-                    setActions);
 
                 if (set.Badges.Count > 0)
                 {
@@ -163,7 +169,8 @@ public sealed class StripUiaProvider :
                             $"{row.AppName} — {row.Title}",
                             row.BoundsDip,
                             () => _invoke(row.Window),
-                            listingActions);
+                            listingActions,
+                            row.IsOffscreen);
                     }
                 }
             }

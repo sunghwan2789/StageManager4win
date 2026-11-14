@@ -80,7 +80,11 @@ internal sealed class OverlayTarget : IDisposable
                     ? (uint)Math.Max(1, Math.Round(2 * scale))
                     : 0;
                 var key = $"card|{set.SetId}|{card.Window.Window.Value}|{card.Window.ProcessId}|{width}x{height}|{card.Title}";
-                var element = Find(old, key);
+                var element = Find(old, key)
+                    ?? old.FirstOrDefault(candidate => candidate.Kind == ElementKind.Card
+                        && candidate.Window == card.Window
+                        && candidate.Width == width
+                        && candidate.Height == height);
                 if (element is null)
                 {
                     element = CreateElement(
@@ -104,9 +108,12 @@ internal sealed class OverlayTarget : IDisposable
                 }
                 else
                 {
+                    element.Key = key;
+                    element.SetId = set.SetId;
                     UpdateElement(
                         element,
                         card.BoundsDip,
+                        card.StackIndex,
                         card.Icon,
                         card.IsMinimized,
                         card.SourceHwnd,
@@ -116,6 +123,7 @@ internal sealed class OverlayTarget : IDisposable
                         scale);
                 }
 
+                element.CaptureOnly = set.CaptureOnly;
                 next.Add(element);
             }
 
@@ -152,6 +160,7 @@ internal sealed class OverlayTarget : IDisposable
                     UpdateElement(
                         element,
                         badge.BoundsDip,
+                        0,
                         badge.Icon,
                         false,
                         0,
@@ -168,7 +177,7 @@ internal sealed class OverlayTarget : IDisposable
 
         foreach (var set in sets.Where(set => set.ListingOpen))
         {
-            foreach (var row in set.ListingRows)
+            foreach (var row in set.ListingRows.Where(row => !row.IsOffscreen))
             {
                 var width = Math.Max(1, (int)Math.Ceiling(row.BoundsDip.Width * scale));
                 var height = Math.Max(1, (int)Math.Ceiling(row.BoundsDip.Height * scale));
@@ -201,6 +210,7 @@ internal sealed class OverlayTarget : IDisposable
                     UpdateElement(
                         element,
                         row.BoundsDip,
+                        0,
                         row.Icon,
                         false,
                         0,
@@ -229,6 +239,11 @@ internal sealed class OverlayTarget : IDisposable
         IDCompositionVisual? previous = null;
         foreach (var element in _elements)
         {
+            if (element.CaptureOnly)
+            {
+                continue;
+            }
+
             if (previous is null)
             {
                 _root.AddVisual(element.Visual, false, null);
@@ -331,6 +346,7 @@ internal sealed class OverlayTarget : IDisposable
     private void UpdateElement(
         ElementTarget element,
         RectD boundsDip,
+        int stackIndex,
         IconBitmap? icon,
         bool isMinimized,
         nint sourceHwnd,
@@ -341,13 +357,15 @@ internal sealed class OverlayTarget : IDisposable
         BadgeChipVisual? badge = null,
         ListingRowVisual? listing = null)
     {
-        var repaint = element.Icon != icon
-                      || element.BorderPixels != borderPixels
-                      || element.BorderBgra != borderBgra
-                      || element.Badge != badge
-                      || element.Listing != listing;
+        var repaint = (element.Icon != icon
+                       || element.BorderPixels != borderPixels
+                       || element.BorderBgra != borderBgra
+                       || element.Badge != badge
+                       || element.Listing != listing)
+                      && !(element.Kind == ElementKind.Card && element.LastFrame != 0);
         element.BaseX = (float)(boundsDip.X * scale);
         element.BaseY = (float)(boundsDip.Y * scale);
+        element.StackIndex = stackIndex;
         element.Icon = icon;
         element.IsMinimized = isMinimized;
         element.SourceHwnd = sourceHwnd;
@@ -691,15 +709,17 @@ internal sealed class OverlayTarget : IDisposable
             Listing = listing;
         }
 
-        public string Key { get; }
+        public string Key { get; set; }
 
         public ElementKind Kind { get; }
 
-        public string SetId { get; }
+        public string SetId { get; set; }
+
+        public bool CaptureOnly { get; set; }
 
         public WindowKey Window { get; }
 
-        public int StackIndex { get; }
+        public int StackIndex { get; set; }
 
         public int RowIndex { get; }
 

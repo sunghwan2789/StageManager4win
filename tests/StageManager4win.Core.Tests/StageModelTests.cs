@@ -270,7 +270,7 @@ public class StageModelTests
     }
 
     [Fact]
-    public void Minimize_ActiveSingleton_PromotesStripAndAddsSingleton()
+    public void Minimize_ActiveSingleton_PromotesStripAndRemovesMember()
     {
         var model = new StageModel();
         model.Reset(new[] { W(1, "A"), W(2, "B"), W(3, "C") }, new WindowId(1));
@@ -280,11 +280,9 @@ public class StageModelTests
         model.Minimize(new WindowId(1));
 
         AssertActive(model, "M1", 2);
-        AssertStrip(model, "M1", 1, 3);
+        AssertStrip(model, "M1", 3);
         Assert.True(model.Windows[new WindowId(1)].IsMinimized);
-        var singleton = model.Monitors["M1"].StripSets[0];
-        Assert.True(singleton.Contains(K(1)));
-        Assert.Empty(singleton.Geometry);
+        Assert.DoesNotContain(K(1), model.Monitors["M1"].StripSets.SelectMany(set => set.Members));
     }
 
     [Fact]
@@ -297,7 +295,8 @@ public class StageModelTests
 
         AssertActive(model, "M1", 2);
         Assert.Equal(K(2), model.Monitors["M1"].ActiveSet!.Foreground);
-        AssertStrip(model, "M1", 1, 3);
+        AssertStrip(model, "M1", 3);
+        Assert.DoesNotContain(K(1), model.Monitors["M1"].StripSets.SelectMany(set => set.Members));
     }
 
     [Fact]
@@ -383,7 +382,7 @@ public class StageModelTests
 
         Assert.False(model.Monitors.ContainsKey("M1"));
         var state = model.Monitors["M2"];
-        Assert.Equal(new[] { K(2), K(1) }, state.ActiveSet!.Members);
+        Assert.Equal(K(2), state.ActiveSet!.Members[^1]);
         Assert.Equal(K(2), state.ActiveSet.Foreground);
     }
 
@@ -403,7 +402,7 @@ public class StageModelTests
     }
 
     [Fact]
-    public void Add_NewWindow_JoinsTopOfStripEvenInAllAtOnce()
+    public void Add_NewWindow_AppendsToStripEvenInAllAtOnce()
     {
         var model = new StageModel(WindowMode.AllAtOnce);
         model.Reset(new[] { W(1, "A"), W(2, "B") }, new WindowId(1));
@@ -411,7 +410,7 @@ public class StageModelTests
         model.Add(W(3, "A"));
 
         AssertActive(model, "M1", 1);
-        AssertStrip(model, "M1", 3, 2);
+        AssertStrip(model, "M1", 2, 3);
     }
 
     [Fact]
